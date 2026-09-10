@@ -213,20 +213,20 @@ func TestExportReportingSchemaVersionRejectsBeforeOpen(t *testing.T) {
 		{
 			name: "hour",
 			args: []string{
-				"export", "hour", "--schema-version", "3",
+				"export", "hour", "--schema-version", "99",
 				"2026-07-28-10",
 			},
 		},
 		{
 			name: "day",
 			args: []string{
-				"export", "day", "--schema-version", "3", "2026-07-28",
+				"export", "day", "--schema-version", "99", "2026-07-28",
 			},
 		},
 		{
 			name: "digest",
 			args: []string{
-				"export", "digest", "--schema-version", "3",
+				"export", "digest", "--schema-version", "99",
 				"--from", "2026-07-28",
 				"--to", "2026-07-28",
 			},
@@ -251,7 +251,7 @@ func TestExportReportingSchemaVersionRejectsBeforeOpen(t *testing.T) {
 				newExportReportingTestRootWithDeps(deps), tt.args...,
 			)
 			require.EqualError(
-				t, err, "unsupported reporting schema version 3",
+				t, err, "unsupported reporting schema version 99",
 			)
 			assert.False(t, opened)
 			assert.Empty(t, stdout)

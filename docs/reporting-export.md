@@ -23,7 +23,7 @@ Digest ranges are inclusive, require both bounds, and may contain at most 31
 dates.
 
 Version 2 is the default when `--schema-version` is omitted. Hour, day, and
-digest commands accept an explicit value of `1` or `2`; any other value is
+digest commands accept an explicit value of `1`, `2`, or `3`; any other value is
 rejected before the archive is opened or output is written. Version 1 preserves
 its original first-seen snapshot and token-only charging semantics.
 
@@ -102,6 +102,91 @@ ordered closed-hour documents, and a `digest` only when all 24 hours are
 present. `agentsview export hour H` is constructed by the same day reader and
 emits byte-for-byte the canonical hour element contained by `export day D`.
 
+## Joint bucket cells (version 3)
+
+Version 3 keeps version 2's accounting rules and adds a `joint` object to every
+hour. Independent project, model and agent breakdowns cannot answer a combined
+filter such as "model A on project B". Joint cells retain those relationships
+without exporting session identifiers, titles, messages or tool content.
+
+```sh
+agentsview export day --schema-version 3 2026-07-28
+agentsview export hour --schema-version 3 --project-key <project-key> 2026-07-28-13
+agentsview export digest --schema-version 3 --project-key <project-key> \
+  --from 2026-07-01 --to 2026-07-28
+```
+
+Repeat `--project-key` to include more projects. Get the archive-scoped keys
+from the project breakdowns or a session export's project map. No keys means the
+whole archive, including unattributed usage. An explicit key selects only that
+project; an unknown key produces an empty replacement, not an error. An empty
+key is invalid. Versions 1 and 2 reject project selection.
+
+The selected scope applies to the **whole hour**, including existing totals,
+breakdowns and per-device bucket maxima. The exporter chooses canonical usage
+survivors and allocates authoritative costs before applying scope. A duplicate
+observation excluded by that selection cannot become a new charge just because
+its winning observation belongs to another project. This is export selection,
+not an authorization check; callers still own permission and destination rules.
+
+`joint.project_keys` contains the sorted, unique requested keys (`[]` for the
+whole archive). `joint.cells` is a sparse array with these fields:
+
+| Field                         | Meaning                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `bucket_start`                | UTC start of a half-open five-minute bucket                                                     |
+| `project`, `project_key`      | Safe display label and canonical archive-scoped key; an empty key is unattributed               |
+| `agent`, `model`              | Producer agent and model; `unknown` when absent                                                 |
+| `automation`                  | `interactive`, `automated`, or `unknown` for observations without session classification        |
+| `agent_minutes`, `max_agents` | Sum of inferred activity durations and simultaneous peak within this cell                       |
+| `usage`                       | Input, output, cache-creation and cache-read tokens, plus cost in integer microdollars          |
+| `pricing`                     | `computed_cost`, `reported_cost`, `allocated_cost` in integer microdollars, and `unpriced_rows` |
+
+Known cost is partitioned across the three pricing fields; their sum is the
+cell's usage cost. `allocated_cost` identifies an authoritative total
+apportioned by the existing accounting rules, not separately measured
+per-message spend. `unpriced_rows` counts canonical usage observations without
+complete pricing. Known fees still contribute to cost when token prices are
+unknown; that cost is incomplete, not free usage. Activity-only cells have zero
+usage. Usage without an activity interval still contributes tokens and cost, but
+not invented minutes. Usage is assigned by observation timestamp, not spread
+over an activity interval.
+
+Activity uses the same gap cap, model attribution, clipping and overlap removal
+as the Activity report. Agent-minutes are not measured human working time. A
+report edge inside a cell has five-minute precision; consumers must not prorate
+that cell and claim an exact instant-level result.
+
+### Concurrency and corrections
+
+A model switch can create two cells for one session in the same bucket. Adding
+their maxima can overstate even a single device's peak. For selected cells in a
+bucket, use this upper bound across devices:
+
+```text
+sum over devices of min(device bucket max_agents,
+                       sum of that device's selected cell max_agents)
+```
+
+Take the maximum bucket bound for a window-level bound. The companion device
+maximum is `activity.buckets[].max_agents` from the same permitted export scope.
+This is not exact selected concurrency or exact cross-device concurrency.
+
+Cells are sorted by bucket, project key, agent, model and automation. Their
+entire contents and requested project scope participate in the hour digest,
+including for quiet hours. A changed hour replaces its entire previous cell set
+in the same scope; removed cells are retractions. An empty set retracts all
+previous cells. Never append a replacement as additional usage, or combine
+overlapping export scopes as independent sources.
+
+Old parser corrections, project changes, pricing changes and deletions can
+change a closed hour. Re-export and replace it when its digest changes; closing
+an hour does not freeze its meaning. Version 3 does not add a history checkpoint
+or a deletion journal. Digest screening still computes full day exports before
+returning identities, and a single-hour command still reads the corresponding
+day. Joint export adds aggregation and output proportional to the populated
+cells; it is not a source-side incremental optimization.
+
 ## Quiet hours
 
 A quiet hour means that the archive has no activity or usage observation for
@@ -126,9 +211,9 @@ archive snapshot even when a sync writes concurrently. Usage deduplication and
 authoritative session-cost allocation happen once on the merged usage stream
 across the day before rows are partitioned by hour.
 
-Version 2 selects the greatest output-token snapshot for each Claude
-message/request identity before generic deduplication, retains the earliest
-session for attribution, and carries the maximum observed web-search count into
+Versions 2 and 3 select the greatest output-token snapshot for each Claude
+message/request identity before generic deduplication, retain the earliest
+session for attribution, and carry the maximum observed web-search count into
 pricing. Version 1 instead uses its original first-seen usage deduplication,
 ordered by occurrence time, session ID ascending, and
 `COALESCE(message_ordinal, -1)` ascending, and does not charge web-search
@@ -138,18 +223,17 @@ fields provide deterministic tie-breakers only after that shared ordering
 prefix.
 
 Arrays use stable contract ordering. Canonical JSON preserves declared JSON
-field names and encodes money exactly. Both supported versions use a
-project-specific
-canonical format and does not claim RFC 8785 or JSON Canonicalization Scheme
-compliance. Its byte rules are:
+field names and encodes money exactly. All supported versions use a
+project-specific canonical format and do not claim RFC 8785 or JSON
+Canonicalization Scheme compliance. Its byte rules are:
 
 - Go JSON field names, `omitempty`, and custom marshalers are applied first;
 - object keys sort lexicographically by UTF-16 code units;
 - array order is preserved;
 - output contains no insignificant whitespace;
 - strings use Go JSON escaping with HTML escaping disabled: `<`, `>`, and `&`
-  remain literal, defined short control escapes such as `\b` and `\f` are used,
-  other control characters use `\u00xx`, and U+2028/U+2029 are escaped;
+  remain literal, defined short control escapes such as `\b` and `\f` are
+  used, other control characters use `\u00xx`, and U+2028/U+2029 are escaped;
 - integers use minimal base-10 form and preserve their complete value, including
   values above `2^53`;
 - negative zero is encoded as `0`;
@@ -213,13 +297,14 @@ SHA-256:   940f129aabf5afc6800add24fbf597727e9dc6316f6ae10adbc78a3362b1c483
 
 ## Versioning
 
-Versions 1 and 2 are stable wire contracts. Integrations should request and
+Versions 1, 2 and 3 are explicit wire contracts. Integrations should request and
 require the intended `schema_version`, reject unknown fields, and verify the
 canonical content digest before accepting an hour. Version 2 adds complete
 Claude snapshot selection and web-search charging; version 1 remains available
-with its original accounting semantics. Adding, renaming, or removing a field,
-changing a type or accounting rule, or changing canonicalization requires a new
-schema version.
+with its original accounting semantics. Version 3 adds scoped joint cells;
+versions 1 and 2 retain their field shapes and digests, and version 2 remains
+the default. Adding, renaming, or removing a field, changing a type or
+accounting rule, or changing canonicalization requires a new schema version.
 
 ## Local SQLite scope
 
