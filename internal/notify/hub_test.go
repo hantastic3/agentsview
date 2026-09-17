@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -548,12 +549,37 @@ func TestHubDisabledConfigIsSilent(t *testing.T) {
 	assert.Empty(t, store.events)
 }
 
+// countingStore counts candidate queries, so a test can tell a real
+// check apart from a notification that arrived for some other
+// reason. The counter is atomic because Run queries from its own
+// goroutine while the test reads it.
+type countingStore struct {
+	*fakeStore
+	queries atomic.Int64
+}
+
+func (c *countingStore) NotificationCandidates(
+	ctx context.Context, cursor Cursor, readyAt time.Time, limit int,
+) ([]Snapshot, error) {
+	c.queries.Add(1)
+	return c.fakeStore.NotificationCandidates(ctx, cursor, readyAt, limit)
+}
+
 func TestHubRunCoalescesScopeBursts(t *testing.T) {
-	store := newFakeStore()
+	store := &countingStore{fakeStore: newFakeStore()}
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
-	hub := newReadyHub(store, enabledCfg, readyAt, 30*time.Millisecond)
+	// A window three orders of magnitude wider than the send loop
+	// below, so the burst provably lands inside one coalesce
+	// interval rather than racing the timer.
+	hub := newReadyHub(store, enabledCfg, readyAt, 200*time.Millisecond)
 	ch, unsub := hub.Subscribe()
 	defer unsub()
+
+	// newReadyHub leaves the readiness wake queued. Drain it before
+	// Run starts: otherwise the wake's check would be the one that
+	// notifies, and the count below would describe that check rather
+	// than the burst.
+	<-hub.readyWake
 
 	ctx := t.Context()
 	scopes := make(chan string, 16)
@@ -566,6 +592,8 @@ func TestHubRunCoalescesScopeBursts(t *testing.T) {
 	}
 	collect(t, ch, 1)
 	assert.Len(t, store.events, 1)
+	assert.Equal(t, int64(1), store.queries.Load(),
+		"ten scopes must collapse into one check, not ten")
 
 	// Later bursts re-check; the archive cursor keeps it silent.
 	for range 5 {
@@ -574,8 +602,10 @@ func TestHubRunCoalescesScopeBursts(t *testing.T) {
 	select {
 	case n := <-ch:
 		t.Fatalf("burst re-notified: %+v", n)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 	}
+	assert.Equal(t, int64(2), store.queries.Load(),
+		"a later burst must actually re-check the archive")
 }
 
 // TestHubCheckBeforeMarkReadyDecidesNothing covers the startup gate.
