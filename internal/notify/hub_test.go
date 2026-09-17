@@ -341,6 +341,90 @@ func TestHubBurstWithTiedTimestampsNotifiesEverySession(t *testing.T) {
 	}
 }
 
+// midCheckWriteStore models a transcript write that commits while a
+// check is in flight: after the store's snapshot was read, before
+// the Hub updates its cursor. That is the window a cursor closed at
+// "now" would step over.
+type midCheckWriteStore struct {
+	*fakeStore
+	onQuery func()
+}
+
+func (m *midCheckWriteStore) NotificationCandidates(
+	ctx context.Context, cursor Cursor, readyAt time.Time, limit int,
+) ([]Snapshot, error) {
+	out, err := m.fakeStore.NotificationCandidates(
+		ctx, cursor, readyAt, limit)
+	if m.onQuery != nil {
+		m.onQuery()
+	}
+	return out, err
+}
+
+// TestHubCursorNeverPassesTheQuerySnapshot is the zero-coalesce
+// regression: events_coalesce_interval may be set to 0, which used
+// to zero the look-back as well, and the window was then closed at
+// "now" — after the query. A candidate that committed in between
+// landed below the cursor and was never notified again.
+func TestHubCursorNeverPassesTheQuerySnapshot(t *testing.T) {
+	store := newFakeStore()
+	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
+	// A zero coalesce interval: the look-back must not collapse
+	// with it, and the cursor must close at the query watermark.
+	hub := NewHub(store, enabledCfg, readyAt, 0)
+	now := readyAt.Add(time.Minute)
+	hub.now = func() time.Time { return now }
+	ch, unsub := hub.Subscribe()
+	defer unsub()
+
+	// s2 commits during the first check: its stamp sits between
+	// the watermark that check took and the clock reading it would
+	// otherwise have used to close the window.
+	late := readyAt.Add(time.Minute + time.Second)
+	hub.store = &midCheckWriteStore{fakeStore: store, onQuery: func() {
+		now = now.Add(3 * time.Second)
+		store.candidates = append(store.candidates,
+			hubTestSnapshot("s2", 10, func(s *Snapshot) {
+				s.TranscriptModifiedAt = late
+			}))
+	}}
+
+	hub.Check(context.Background())
+	got := collect(t, ch, 1)
+	require.Equal(t, "s1", got[0].SessionID)
+
+	// The window closed at the watermark taken before the query,
+	// not at the clock reading after it (now moved forward by the
+	// mid-check write).
+	hub.mu.Lock()
+	closed := hub.cursor.Since
+	hub.mu.Unlock()
+	assert.Equal(t, readyAt.Add(time.Minute), closed,
+		"the cursor must close at the pre-query watermark")
+
+	// The next check must still see the session that landed
+	// mid-flight. Skipping it here is the permanent-loss bug.
+	hub.Check(context.Background())
+	got = collect(t, ch, 1)
+	assert.Equal(t, "s2", got[0].SessionID,
+		"a candidate written during a check must not be skipped")
+}
+
+// TestHubLookbackHasAPositiveFloor pins the other half of the same
+// fix: the trailing window cannot be derived from a user-settable
+// interval that is allowed to be zero.
+func TestHubLookbackHasAPositiveFloor(t *testing.T) {
+	for _, debounce := range []time.Duration{0, time.Millisecond, 10 * time.Second} {
+		hub := NewHub(newFakeStore(), enabledCfg, readyAt, debounce)
+		assert.GreaterOrEqual(t, hub.lookback(), cursorLookbackFloor,
+			"debounce %s must not shrink the look-back below the floor",
+			debounce)
+	}
+	// A long interval still scales the window.
+	hub := NewHub(newFakeStore(), enabledCfg, readyAt, time.Minute)
+	assert.Equal(t, 2*time.Minute, hub.lookback())
+}
+
 // TestHubNeverFormatsTimestamps guards the design rule that the
 // Hub passes time.Time only and the store owns the ordering domain.
 // A Format call here would re-introduce the trailing-zero mismatch

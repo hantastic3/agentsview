@@ -15,6 +15,17 @@ import (
 // exhausted and strand the rest of a burst.
 const candidateBatchLimit = 64
 
+// cursorLookbackFloor is the smallest trailing window a check
+// re-scans when it is not draining a backlog. The coalesce interval
+// is a user-facing setting and may legitimately be zero, so this
+// overlap cannot be derived from it: with a zero window, a
+// candidate whose write commits between the candidate query and the
+// cursor update falls permanently outside the cursor and is never
+// notified. Re-scanning is free of duplicates because the persisted
+// per-session State suppresses sessions already reported; it only
+// costs one extra indexed read per check.
+const cursorLookbackFloor = 5 * time.Second
+
 // Cursor is the exclusive lower bound of the next candidate batch,
 // in the store's (transcript_modified_at, session id) ordering. An empty
 // ID is a plain, strictly greater time bound (the look-back
@@ -211,17 +222,29 @@ func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 // row that the full batch did not include. Re-scanning is harmless
 // because the persisted per-session State suppresses sessions
 // already notified.
+//
+// Neither branch ever moves the cursor past the batch's own
+// snapshot. The empty-window branch closes at a watermark taken
+// before the query ran rather than at "now" after it, so a
+// candidate written while this check was in flight still sorts
+// above the cursor and is picked up by the next one instead of
+// being skipped forever.
 func (h *Hub) Check(ctx context.Context) {
 	h.mu.Lock()
 	cursor := h.cursor
 	if !h.backlog {
 		// Look-back overlap: re-scan a trailing window so a
 		// candidate stamped just before the last check is not
-		// missed. A plain time bound, with no id tiebreak.
-		cursor = Cursor{Since: h.cursor.Since.Add(-2 * h.debounce)}
+		// missed. A plain time bound, with no id tiebreak. The
+		// window has a positive floor: the coalesce interval it
+		// scales with is user-configurable and may be zero.
+		cursor = Cursor{Since: h.cursor.Since.Add(-h.lookback())}
 	}
 	decider := h.decider
 	readyAt := h.readyAt
+	// Watermark for the batch about to be read. Taken before the
+	// query so it can never sit past the store's snapshot.
+	queriedAt := h.now()
 	h.mu.Unlock()
 
 	candidates, err := h.store.NotificationCandidates(
@@ -274,9 +297,23 @@ func (h *Hub) Check(ctx context.Context) {
 		}
 		h.backlog = true
 	} else {
-		// The window is exhausted; close it.
+		// The window is exhausted; close it at the watermark, not
+		// at now: a candidate committed after the query but before
+		// this line would otherwise land below the cursor and never
+		// be seen again.
 		h.backlog = false
-		h.cursor = Cursor{Since: h.now()}
+		h.cursor = Cursor{Since: queriedAt}
 	}
 	h.mu.Unlock()
+}
+
+// lookback returns the trailing window a non-backlog check
+// re-scans. It tracks the coalesce interval but never drops below
+// cursorLookbackFloor, so a zero coalesce interval still leaves the
+// overlap that keeps concurrent writes from being skipped.
+func (h *Hub) lookback() time.Duration {
+	if window := 2 * h.debounce; window > cursorLookbackFloor {
+		return window
+	}
+	return cursorLookbackFloor
 }
