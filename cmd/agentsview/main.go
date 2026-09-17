@@ -499,7 +499,17 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// process, and the gap reconciliation that finishes it is
 	// deferred until the server is listening, so this is not the end
 	// of startup writes for that path — the hub is marked ready at
-	// the end of completeWorkerStartup instead.
+	// the end of completeWorkerStartup instead. That is the path
+	// where the gate is load-bearing: server.New has installed the
+	// live policy by then, so a reconciliation write would otherwise
+	// be announced as a turn the user did not take.
+	//
+	// The in-process path above is silenced twice over. The hub
+	// still carries the placeholder notify.DefaultConfig (Enabled
+	// false) until server.New swaps in the live policy, so Decide
+	// returns nothing while startup runs. That placeholder is not a
+	// substitute for the gate — it only covers the paths that
+	// finish startup before the server exists.
 	//
 	// This sits outside the !NoSync block deliberately: --no-sync
 	// runs no startup sync at all, so there is nothing to wait for,
