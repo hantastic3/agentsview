@@ -426,6 +426,20 @@ func runServe(cfg config.Config, opts serveOptions) {
 						engine.ReconcileWatchRoots,
 						queueWatchRetry,
 						engine.RecordStartupReconciled,
+						// Only now is the startup state final. The
+						// reconciliation above is a real sync: it
+						// writes transcript for sessions that changed
+						// while the worker was running, and those
+						// writes must stay silent like any other
+						// startup sync. Marking the hub ready before
+						// it ran would turn the gap reconciliation
+						// into a burst of notifications for work the
+						// user did not just do.
+						func() {
+							if ctx.Err() == nil {
+								notificationHub.MarkReady(time.Now())
+							}
+						},
 					)
 				}
 			} else if database.NeedsResync() {
@@ -443,10 +457,19 @@ func runServe(cfg config.Config, opts serveOptions) {
 			}
 		}
 
-		// Startup sync (initial sync, worker reconciliation, or
-		// full resync) has finished: everything the sync touched
+		// Startup sync has finished: everything the sync touched
 		// before this point must stay notification-silent.
-		notificationHub.MarkReady(time.Now())
+		//
+		// The worker path is the exception. Its startup sync ran out
+		// of process, and the gap reconciliation that finishes it is
+		// deferred until the server is listening, so this is not the
+		// end of startup writes for that path — the hub is marked
+		// ready at the end of completeWorkerStartup instead. Until
+		// then it stays pinned to the readiness snapshot it was built
+		// with, which predates every write made here.
+		if completeWorkerStartup == nil {
+			notificationHub.MarkReady(time.Now())
+		}
 
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
