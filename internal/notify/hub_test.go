@@ -174,10 +174,34 @@ func collect(t *testing.T, ch <-chan Notification, n int) []Notification {
 	return got
 }
 
+// newReadyHub builds a hub with the startup gate already open,
+// which is the state every steady-state check runs in. Tests that
+// exercise the gate itself build with NewHub and check before
+// MarkReady.
+func newReadyHub(
+	store Store, cfgFn func() Config, readyAt time.Time, debounce time.Duration,
+) *Hub {
+	hub := NewHub(store, cfgFn, readyAt, debounce)
+	hub.MarkReady(readyAt)
+	return hub
+}
+
+// eventSessions lists the decided-notification log by session, in
+// the order the Hub wrote it. The log is the authoritative record
+// of what was decided: it is written even with no subscriber
+// attached, unlike the lossy SSE fan-out.
+func eventSessions(events []Notification) []string {
+	out := make([]string, 0, len(events))
+	for _, n := range events {
+		out = append(out, n.SessionID)
+	}
+	return out
+}
+
 func TestHubTurnEndOncePerTurn(t *testing.T) {
 	store := newFakeStore()
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
-	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
 	// Freeze the clock just past the candidate so the cursor is
 	// deterministic: the store's look-back must still cover it.
 	now := readyAt.Add(time.Minute)
@@ -211,7 +235,7 @@ func TestHubTurnEndOncePerTurn(t *testing.T) {
 func TestHubRestartDedup(t *testing.T) {
 	store := newFakeStore()
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
-	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
 	ch, unsub := hub.Subscribe()
 	defer unsub()
 
@@ -220,7 +244,7 @@ func TestHubRestartDedup(t *testing.T) {
 
 	// Simulate a daemon restart: fresh Hub, same archive state.
 	// The persisted cursor must suppress the repeat.
-	hub2 := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub2 := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
 	ch2, unsub2 := hub2.Subscribe()
 	defer unsub2()
 	hub2.Check(context.Background())
@@ -236,7 +260,7 @@ func TestHubFailedCandidateQueryDoesNotAdvanceCursor(t *testing.T) {
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
 	store.queryErr = errors.New("archive unavailable")
 
-	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
 	// A clock far past the candidate: if the failed check advanced
 	// the cursor, the candidate falls outside the next window.
 	hub.now = func() time.Time { return readyAt.Add(time.Hour) }
@@ -277,7 +301,7 @@ func TestHubBurstExceedingCandidateCapNotifiesEverySession(t *testing.T) {
 
 	// Production debounce is EventsCoalesceInterval (10s); use it
 	// so the -2*debounce look-back is realistic.
-	hub := NewHub(store, enabledCfg, readyAt, 10*time.Second)
+	hub := newReadyHub(store, enabledCfg, readyAt, 10*time.Second)
 	// Freeze the clock just past the newest candidate so the
 	// fallback cursor is deterministic.
 	now := base.Add(time.Second)
@@ -321,7 +345,7 @@ func TestHubBurstWithTiedTimestampsNotifiesEverySession(t *testing.T) {
 			}))
 	}
 
-	hub := NewHub(store, enabledCfg, readyAt, 10*time.Second)
+	hub := newReadyHub(store, enabledCfg, readyAt, 10*time.Second)
 	now := tie.Add(10 * time.Second) // trailing edge of the burst
 	hub.now = func() time.Time { return now }
 
@@ -371,7 +395,7 @@ func TestHubCursorNeverPassesTheQuerySnapshot(t *testing.T) {
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
 	// A zero coalesce interval: the look-back must not collapse
 	// with it, and the cursor must close at the query watermark.
-	hub := NewHub(store, enabledCfg, readyAt, 0)
+	hub := newReadyHub(store, enabledCfg, readyAt, 0)
 	now := readyAt.Add(time.Minute)
 	hub.now = func() time.Time { return now }
 	ch, unsub := hub.Subscribe()
@@ -445,7 +469,7 @@ func TestHubSkipsSessionWithUnreadableDedupState(t *testing.T) {
 		hubTestSnapshot("corrupt", 10),
 		hubTestSnapshot("healthy", 10),
 	}
-	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
 	hub.Check(context.Background())
 
 	// A corrupt dedup row must not read as "never notified": the
@@ -462,7 +486,7 @@ func TestHubWorksWithoutSubscribers(t *testing.T) {
 	// still decides, persists dedup state, and logs the event.
 	store := newFakeStore()
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
-	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
 
 	hub.Check(context.Background())
 	require.Len(t, store.events, 1)
@@ -472,7 +496,7 @@ func TestHubWorksWithoutSubscribers(t *testing.T) {
 func TestHubFanOutAndSlowSubscriber(t *testing.T) {
 	store := newFakeStore()
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
-	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
 	// Freeze the clock just past the candidate so the second check's
 	// look-back still covers the replacement batch below.
 	now := readyAt.Add(time.Minute)
@@ -511,7 +535,7 @@ func TestHubDisabledConfigIsSilent(t *testing.T) {
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
 	cfg := enabledCfg()
 	cfg.Enabled = false
-	hub := NewHub(store, func() Config { return cfg }, readyAt, time.Millisecond)
+	hub := newReadyHub(store, func() Config { return cfg }, readyAt, time.Millisecond)
 	ch, unsub := hub.Subscribe()
 	defer unsub()
 
@@ -527,7 +551,7 @@ func TestHubDisabledConfigIsSilent(t *testing.T) {
 func TestHubRunCoalescesScopeBursts(t *testing.T) {
 	store := newFakeStore()
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
-	hub := NewHub(store, enabledCfg, readyAt, 30*time.Millisecond)
+	hub := newReadyHub(store, enabledCfg, readyAt, 30*time.Millisecond)
 	ch, unsub := hub.Subscribe()
 	defer unsub()
 
@@ -552,4 +576,197 @@ func TestHubRunCoalescesScopeBursts(t *testing.T) {
 		t.Fatalf("burst re-notified: %+v", n)
 	case <-time.After(200 * time.Millisecond):
 	}
+}
+
+// TestHubCheckBeforeMarkReadyDecidesNothing covers the startup gate.
+// The hub is built before the startup sync runs, so a check that ran
+// then would decide against a readiness snapshot that predates every
+// write the sync is about to make — announcing work the user did not
+// just do.
+func TestHubCheckBeforeMarkReadyDecidesNothing(t *testing.T) {
+	store := newFakeStore()
+	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
+	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	now := readyAt.Add(time.Minute)
+	hub.now = func() time.Time { return now }
+	ch, unsub := hub.Subscribe()
+	defer unsub()
+
+	// Startup sync output reaches Check through Run's debounce; a
+	// direct call is the same path with less ceremony.
+	hub.Check(context.Background())
+	select {
+	case n := <-ch:
+		t.Fatalf("decided before startup finished: %+v", n)
+	case <-time.After(20 * time.Millisecond):
+	}
+	assert.Empty(t, store.events)
+	assert.Empty(t, store.states)
+
+	// The gate returns before the cursor is even read, so nothing
+	// about the window was consumed either.
+	hub.mu.Lock()
+	seeded := hub.cursor
+	hub.mu.Unlock()
+	assert.Equal(t, readyAt, seeded.Since)
+	assert.Empty(t, seeded.ID)
+
+	// Opening the gate makes the same window eligible.
+	hub.MarkReady(readyAt)
+	hub.Check(context.Background())
+	got := collect(t, ch, 1)
+	assert.Equal(t, "s1", got[0].SessionID)
+}
+
+// TestHubMarkReadyWakesRun pins the other half of the gate: Run must
+// not wait for its next periodic sweep to notice that startup ended,
+// or the first post-startup turn could sit silent for checkEvery.
+func TestHubMarkReadyWakesRun(t *testing.T) {
+	store := newFakeStore()
+	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
+	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	ch, unsub := hub.Subscribe()
+	defer unsub()
+
+	scopes := make(chan string)
+	go hub.Run(t.Context(), scopes)
+
+	// No scope ever arrives, so only the readiness wake can trigger
+	// a check. The sweep cannot be the cause: checkEvery is 30s and
+	// collect gives up after 2s.
+	hub.MarkReady(readyAt)
+	got := collect(t, ch, 1)
+	assert.Equal(t, "s1", got[0].SessionID)
+}
+
+// failingSaveStore models an archive whose dedup-state write fails
+// for one session. Without the persisted state a decision is not
+// durable, so the cursor must not move past it.
+type failingSaveStore struct {
+	*fakeStore
+	badSession string
+	fail       bool
+}
+
+func (s *failingSaveStore) SaveNotificationState(
+	ctx context.Context, sessionID string, st State,
+) error {
+	if s.fail && sessionID == s.badSession {
+		return errors.New("notification state write failed")
+	}
+	return s.fakeStore.SaveNotificationState(ctx, sessionID, st)
+}
+
+// TestHubSaveFailureHoldsCursorForRetry is the failure-aware cursor
+// regression: a candidate whose state could not be persisted has not
+// been decided, and advancing the cursor over it would suppress that
+// notification for good.
+func TestHubSaveFailureHoldsCursorForRetry(t *testing.T) {
+	store := &failingSaveStore{
+		fakeStore:  newFakeStore(),
+		badSession: "flaky",
+		fail:       true,
+	}
+	// Store order is by id within a tied timestamp, so the failing
+	// session opens the batch: the cursor cannot move at all.
+	store.candidates = []Snapshot{
+		hubTestSnapshot("flaky", 10),
+		hubTestSnapshot("steady", 10),
+	}
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
+	// A clock far past the batch: a cursor that advanced would leave
+	// the retry outside the next window.
+	hub.now = func() time.Time { return readyAt.Add(time.Hour) }
+
+	hub.Check(context.Background())
+	// The healthy session in the same batch still fires; only the
+	// undecidable one is held back.
+	require.Len(t, store.events, 1)
+	assert.Equal(t, "steady", store.events[0].SessionID)
+	assert.NotContains(t, store.states, "flaky")
+
+	hub.mu.Lock()
+	held := hub.cursor
+	hub.mu.Unlock()
+	assert.Equal(t, readyAt, held.Since, "the cursor must not move")
+
+	// The archive recovers. The held candidate is still inside the
+	// window, which is the only reason it is retried.
+	store.fail = false
+	hub.Check(context.Background())
+	require.Len(t, store.events, 2)
+	assert.Equal(t, "flaky", store.events[1].SessionID)
+	assert.Equal(t, int64(10), store.states["flaky"].TurnEndOrdinal)
+}
+
+// TestHubSaveFailureResumesBeforeTheFailedCandidate covers the
+// partial case: the cursor may advance through the candidates that
+// were decided, but not past the first one that was not.
+func TestHubSaveFailureResumesBeforeTheFailedCandidate(t *testing.T) {
+	store := &failingSaveStore{
+		fakeStore:  newFakeStore(),
+		badSession: "a-02",
+		fail:       true,
+	}
+	for _, id := range []string{"a-00", "a-01", "a-02", "a-03"} {
+		store.candidates = append(store.candidates, hubTestSnapshot(id, 10))
+	}
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub.now = func() time.Time { return readyAt.Add(time.Hour) }
+
+	hub.Check(context.Background())
+	// The batch is processed best-effort: a row whose state cannot
+	// be written is held back, but the rows behind it are still
+	// decided rather than being stalled with it.
+	assert.Equal(t, []string{"a-00", "a-01", "a-03"}, eventSessions(store.events))
+
+	// The resume position is the last decided candidate before the
+	// failure, so the held row is re-read and the tail is not.
+	hub.mu.Lock()
+	resume, backlog := hub.cursor, hub.backlog
+	hub.mu.Unlock()
+	assert.Equal(t, readyAt.Add(time.Minute), resume.Since)
+	assert.Equal(t, "a-01", resume.ID)
+	assert.True(t, backlog, "a held candidate must keep the drain going")
+
+	// The archive recovers: exactly the held session is retried, and
+	// the candidates already decided in front of it are not
+	// re-notified.
+	store.fail = false
+	hub.Check(context.Background())
+	assert.Equal(t, []string{"a-00", "a-01", "a-03", "a-02"},
+		eventSessions(store.events))
+}
+
+// failingEventStore models an archive whose notification event log
+// cannot be appended to. The log is diagnostics, not a delivery
+// queue, so it must not hold the cursor: the dedup state written
+// alongside it is already durable.
+type failingEventStore struct {
+	*fakeStore
+}
+
+func (s *failingEventStore) RecordNotificationEvent(
+	context.Context, Notification,
+) error {
+	return errors.New("event log unavailable")
+}
+
+func TestHubEventLogFailureDoesNotHoldCursor(t *testing.T) {
+	store := &failingEventStore{fakeStore: newFakeStore()}
+	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
+	hub := newReadyHub(store, enabledCfg, readyAt, time.Millisecond)
+	now := readyAt.Add(time.Minute)
+	hub.now = func() time.Time { return now }
+
+	hub.Check(context.Background())
+	assert.Empty(t, store.events)
+	// The decision is durable even though its log entry is not.
+	assert.Equal(t, int64(10), store.states["s1"].TurnEndOrdinal)
+
+	hub.mu.Lock()
+	closed := hub.cursor
+	hub.mu.Unlock()
+	assert.Equal(t, readyAt.Add(time.Minute), closed.Since,
+		"an event-log failure must not hold the cursor")
 }

@@ -88,6 +88,15 @@ type Hub struct {
 
 	mu   gosync.Mutex
 	subs map[chan Notification]struct{}
+	// ready gates every check. It stays false until MarkReady, so no
+	// notification can be decided while startup is still writing:
+	// the readyAt snapshot alone only bounds which rows qualify, and
+	// a check that runs before the fence is raised still compares
+	// against the previous snapshot. readyWake carries the MarkReady
+	// signal into Run so the first post-startup check happens at
+	// once instead of on the next sweep.
+	ready     bool
+	readyWake chan struct{}
 	// cursor is the resume position in the store's ordering. Its
 	// ID is set only while draining a backlog (a batch that filled
 	// the cap); otherwise it is a plain time bound.
@@ -101,9 +110,14 @@ type Hub struct {
 	backlog bool
 }
 
-// NewHub builds a Hub. readyAt should be the time startup sync was
-// observed complete; debounce is the trailing-edge coalesce window
-// for scope bursts.
+// NewHub builds a Hub. readyAt seeds the candidate lower bound and
+// the initial cursor; callers normally pass the current time and
+// let MarkReady replace it once startup sync is observed complete.
+// debounce is the trailing-edge coalesce window for scope bursts.
+//
+// The hub starts closed and decides nothing at all until MarkReady
+// is called: startup may still be writing when it is built, and a
+// snapshot taken now would predate that sync rather than bound it.
 func NewHub(
 	store Store, cfgFn func() Config, readyAt time.Time, debounce time.Duration,
 ) *Hub {
@@ -116,6 +130,7 @@ func NewHub(
 		checkEvery: 30 * time.Second,
 		subs:       make(map[chan Notification]struct{}),
 		cursor:     Cursor{Since: readyAt},
+		readyWake:  make(chan struct{}, 1),
 	}
 }
 
@@ -130,8 +145,16 @@ func (h *Hub) SetConfigFn(cfgFn func() Config) {
 }
 
 // MarkReady updates the readiness snapshot after startup sync
-// (initial sync, worker reconciliation, or full resync) finished.
-// Transcript changes observed before it stay silent.
+// (initial sync, worker reconciliation, or full resync) finished,
+// and opens the gate Check waits on. Transcript changes observed
+// before it stay silent.
+//
+// Every caller must reach this, including the paths that run no
+// startup sync at all: the gate starts closed, so a mode that never
+// marks readiness would never notify.
+//
+// The first call also wakes Run, which would otherwise wait for its
+// next sweep before noticing that startup is over.
 func (h *Hub) MarkReady(t time.Time) {
 	h.mu.Lock()
 	h.readyAt = t
@@ -142,7 +165,16 @@ func (h *Hub) MarkReady(t time.Time) {
 	}
 	// A new readiness window supersedes any in-flight backlog.
 	h.backlog = false
+	opened := !h.ready
+	h.ready = true
 	h.mu.Unlock()
+	if opened {
+		select {
+		case h.readyWake <- struct{}{}:
+		default:
+			// A wake is already pending; one is enough.
+		}
+	}
 }
 
 // Subscribe returns a notification channel and an unsubscribe
@@ -178,6 +210,11 @@ func (h *Hub) fanOut(n Notification) {
 // checks for notifiable changes on the trailing edge of each burst,
 // plus a periodic sweep so a lost scope event self-heals within
 // checkEvery.
+//
+// Scopes that arrive before MarkReady are collected and dropped by a
+// check that decides nothing; the readiness wake below is what makes
+// the first real check happen, so startup's own sync output cannot
+// slip through as a notification.
 func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 	timer := time.NewTimer(h.debounce)
 	defer timer.Stop()
@@ -188,6 +225,9 @@ func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-h.readyWake:
+			pending = false
+			h.Check(ctx)
 		case <-scopes:
 			pending = true
 			if !timer.Stop() {
@@ -223,14 +263,23 @@ func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 // because the persisted per-session State suppresses sessions
 // already notified.
 //
-// Neither branch ever moves the cursor past the batch's own
-// snapshot. The empty-window branch closes at a watermark taken
-// before the query ran rather than at "now" after it, so a
-// candidate written while this check was in flight still sorts
-// above the cursor and is picked up by the next one instead of
-// being skipped forever.
+// No branch moves the cursor past the batch's own snapshot. The
+// empty-window branch closes at a watermark taken before the query
+// ran rather than at "now" after it, so a candidate written while
+// this check was in flight still sorts above the cursor and is
+// picked up by the next one instead of being skipped forever. And
+// no branch moves the cursor past a candidate whose state could not
+// be read or written: a transient archive failure is not a decision,
+// and advancing over it would suppress that notification for good.
 func (h *Hub) Check(ctx context.Context) {
 	h.mu.Lock()
+	if !h.ready {
+		// Startup is still writing. Deciding now would compare
+		// against the readiness snapshot the hub was built with,
+		// which predates the sync that is running.
+		h.mu.Unlock()
+		return
+	}
 	cursor := h.cursor
 	if !h.backlog {
 		// Look-back overlap: re-scan a trailing window so a
@@ -257,13 +306,20 @@ func (h *Hub) Check(ctx context.Context) {
 		log.Printf("notify: candidate query: %v", err)
 		return
 	}
-	for _, s := range candidates {
+	// failedAt is the index of the earliest candidate this check could
+	// not carry to a persisted decision. It is the position the cursor
+	// must not pass.
+	failedAt := -1
+	for i, s := range candidates {
 		st, err := h.store.NotificationState(ctx, s.SessionID)
 		if err != nil {
 			// A corrupt or unreadable dedup row must not be
 			// mistaken for "never notified": skip the session
 			// this round and let the next check retry.
 			log.Printf("notify: state load %s: %v", s.SessionID, err)
+			if failedAt < 0 {
+				failedAt = i
+			}
 			continue
 		}
 		d := decider.Decide(s, st, readyAt)
@@ -273,19 +329,44 @@ func (h *Hub) Check(ctx context.Context) {
 		if err := h.store.SaveNotificationState(
 			ctx, s.SessionID, d.State,
 		); err != nil {
+			// Without the persisted state the decision is not
+			// durable: retrying must not depend on the cursor
+			// having moved past it.
 			log.Printf("notify: state save %s: %v", s.SessionID, err)
+			if failedAt < 0 {
+				failedAt = i
+			}
 			continue
 		}
 		if err := h.store.RecordNotificationEvent(
 			ctx, d.Notification,
 		); err != nil {
+			// Diagnostics only, and the dedup state above is
+			// already durable: this must not hold the cursor.
 			log.Printf("notify: event log: %v", err)
 		}
 		h.fanOut(d.Notification)
 	}
 
 	h.mu.Lock()
-	if len(candidates) == candidateBatchLimit {
+	switch {
+	case failedAt == 0:
+		// The window opens with a candidate that was not decided.
+		// Leave the cursor where it was and drop any backlog: the
+		// next check re-reads this same window, which is the only
+		// way the failed session is retried.
+		h.backlog = false
+	case failedAt > 0:
+		// Resume strictly after the last candidate that was
+		// carried to a persisted decision, so the failed one and
+		// everything behind it are re-read.
+		last := candidates[failedAt-1]
+		h.cursor = Cursor{
+			Since: last.TranscriptModifiedAt,
+			ID:    last.SessionID,
+		}
+		h.backlog = true
+	case len(candidates) == candidateBatchLimit:
 		// Full batch: the store may still hold newer candidates.
 		// Resume strictly after the last one processed in the
 		// store's ordering, so rows sharing its timestamp are
@@ -296,7 +377,7 @@ func (h *Hub) Check(ctx context.Context) {
 			ID:    last.SessionID,
 		}
 		h.backlog = true
-	} else {
+	default:
 		// The window is exhausted; close it at the watermark, not
 		// at now: a candidate committed after the query but before
 		// this line would otherwise land below the cursor and never

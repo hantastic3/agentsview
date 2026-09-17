@@ -457,20 +457,6 @@ func runServe(cfg config.Config, opts serveOptions) {
 			}
 		}
 
-		// Startup sync has finished: everything the sync touched
-		// before this point must stay notification-silent.
-		//
-		// The worker path is the exception. Its startup sync ran out
-		// of process, and the gap reconciliation that finishes it is
-		// deferred until the server is listening, so this is not the
-		// end of startup writes for that path — the hub is marked
-		// ready at the end of completeWorkerStartup instead. Until
-		// then it stays pinned to the readiness snapshot it was built
-		// with, which predates every write made here.
-		if completeWorkerStartup == nil {
-			notificationHub.MarkReady(time.Now())
-		}
-
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
 		// during a resync), walking every row to recompute
@@ -501,6 +487,26 @@ func runServe(cfg config.Config, opts serveOptions) {
 		go startPeriodicSync(
 			ctx, cfg, engine, database, writeLock, idleTracker, validRemotes, emitter,
 		)
+	}
+
+	// Startup sync has finished: everything the sync touched before
+	// this point must stay notification-silent, so this is where the
+	// notification hub's gate opens. Check decides nothing at all
+	// until MarkReady, which is what keeps startup's own writes from
+	// being announced as turns the user just took.
+	//
+	// The worker path is the exception. Its startup sync ran out of
+	// process, and the gap reconciliation that finishes it is
+	// deferred until the server is listening, so this is not the end
+	// of startup writes for that path — the hub is marked ready at
+	// the end of completeWorkerStartup instead.
+	//
+	// This sits outside the !NoSync block deliberately: --no-sync
+	// runs no startup sync at all, so there is nothing to wait for,
+	// and leaving the gate shut there would silence notifications
+	// for the whole process lifetime.
+	if completeWorkerStartup == nil {
+		notificationHub.MarkReady(time.Now())
 	}
 
 	identityBackfillEngine := engine
