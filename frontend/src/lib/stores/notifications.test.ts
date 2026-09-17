@@ -8,20 +8,26 @@ import * as runtime from "../paraglide/runtime.js";
 // showNativeNotification talks to whatever bridge the stub provides.
 const sendNotification = vi.fn();
 
-function stubWindow(bridge = true) {
+function stubWindow(bridge = true, granted = true) {
   vi.stubGlobal("window", {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
     __TAURI__: bridge
       ? {
           notification: {
-            isPermissionGranted: async () => true,
-            requestPermission: async () => "granted",
+            isPermissionGranted: async () => granted,
+            requestPermission: async () => (granted ? "granted" : "denied"),
             sendNotification,
           },
         }
       : {},
   });
+}
+
+/** Let the delivery promise settle: the pending click target is
+ * armed in its continuation, not synchronously in deliver. */
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 let seq = 0;
@@ -141,8 +147,9 @@ describe("notifications store", () => {
     const f = frame();
     notifications.deliver(f);
     // Settle the async native delivery so it cannot leak into a
-    // later test's assertions.
+    // later test's assertions, then let the arm continuation run.
     await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
+    await flush();
     notifications.handleFocus(navigate);
     expect(navigate).toHaveBeenCalledWith(f.session_id);
     // The pending click target is consumed: a second focus is inert.
@@ -150,14 +157,17 @@ describe("notifications store", () => {
     expect(navigate).toHaveBeenCalledTimes(1);
   });
 
-  it("does not navigate long after the toast fired", () => {
+  it("does not navigate long after the toast fired", async () => {
     const navigate = vi.fn();
     notifications.deliver(frame());
+    await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
+    await flush();
     const realNow = Date.now;
     vi.spyOn(Date, "now").mockReturnValue(realNow() + 60_000 + 1000);
     notifications.handleFocus(navigate);
     expect(navigate).not.toHaveBeenCalled();
   });
+
 });
 
 describe("showNativeNotification without a bridge", () => {
@@ -168,7 +178,48 @@ describe("showNativeNotification without a bridge", () => {
   it("is a no-op outside the desktop shell", async () => {
     stubWindow(false);
     const { showNativeNotification } = await import("./notifications.svelte.js");
-    // No bridge, no crash: delivery is silently skipped.
-    expect(() => showNativeNotification(frame())).not.toThrow();
+    // No bridge, no crash: delivery is silently skipped and reports
+    // that nothing was sent.
+    await expect(showNativeNotification(frame())).resolves.toBe(false);
+  });
+});
+
+// A window focus is not a click. Arming the pending click target on
+// every delivered frame would let an ordinary focus — the user
+// tabbing back to the window — navigate somewhere they never asked
+// to go. These run against a fresh store instance so no click target
+// left armed by an earlier case can mask the assertion.
+describe("focus navigation without a delivered toast", () => {
+  beforeEach(() => {
+    // Clear before resetting modules: calls recorded by an earlier
+    // case would otherwise look like they came from this one.
+    sendNotification.mockClear();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("does not navigate when there is no desktop bridge", async () => {
+    stubWindow(false); // browser: no native notification ever fires
+    const { notifications } = await import("./notifications.svelte.js");
+    const navigate = vi.fn();
+    notifications.deliver(frame());
+    await flush();
+    notifications.handleFocus(navigate);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate when permission is denied", async () => {
+    stubWindow(true, false);
+    const { notifications } = await import("./notifications.svelte.js");
+    const navigate = vi.fn();
+    notifications.deliver(frame());
+    await flush();
+    expect(sendNotification).not.toHaveBeenCalled();
+    notifications.handleFocus(navigate);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

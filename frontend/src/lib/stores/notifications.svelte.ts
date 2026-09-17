@@ -5,7 +5,10 @@ import { m } from "../i18n/index.js";
 // about, the on-screen transcript wins and no OS toast fires.
 // Clicking an OS notification activates the app window without
 // delivering a click payload to the webview, so activation within
-// this window after a toast is treated as that toast's click.
+// this window after a delivered toast is treated as that toast's
+// click. The window only ever opens for a toast that was really
+// shown: see deliver, which arms the pending click after the
+// native call reports success.
 const FOCUS_NAVIGATION_WINDOW_MS = 30_000;
 
 type NotificationListener = (n: DesktopNotification) => void;
@@ -60,16 +63,23 @@ class NotificationsStore {
     // If the user is already reading this session, the on-screen
     // transcript is the better surface; skip the OS toast.
     if (this.activeSessionId === n.session_id) return;
-    this.lastNotification = n;
-    this.lastFiredAt = Date.now();
-    showNativeNotification(n);
+    // Arm the focus-click target only once the OS toast is known to
+    // have been delivered. Arming it here would make every ordinary
+    // window focus within the window look like a notification click
+    // and yank the user to a session they never clicked — including
+    // in the browser, where no OS notification is ever sent.
+    void showNativeNotification(n).then((delivered) => {
+      if (!delivered) return;
+      this.lastNotification = n;
+      this.lastFiredAt = Date.now();
+    });
     for (const fn of this.listeners.values()) fn(n);
   }
 
-  /** Window-focus hook: activation shortly after a toast fires is
-   * treated as that toast's click and opens the notified session's
-   * last message. `navigate` is injected so the store stays
-   * decoupled from the router. */
+  /** Window-focus hook: activation shortly after an OS toast was
+   * actually delivered is treated as that toast's click and opens
+   * the notified session's last message. `navigate` is injected so
+   * the store stays decoupled from the router. */
   handleFocus(navigate: (sessionId: string) => void): void {
     const n = this.lastNotification;
     if (n === null) return;
@@ -104,23 +114,26 @@ function tauriNotificationPlugin(): TauriNotificationBridge | null {
 
 /** Fire the OS notification when running inside the Tauri shell.
  * Browsers get nothing: the web UI already surfaces live updates
- * and website notifications are out of scope for this feature. */
-export function showNativeNotification(n: DesktopNotification): void {
+ * and website notifications are out of scope for this feature.
+ *
+ * Resolves to whether a toast was actually sent, so callers can
+ * tell "delivered" apart from "skipped" (no plugin, permission
+ * denied, or a plugin error) instead of assuming it. */
+export async function showNativeNotification(n: DesktopNotification): Promise<boolean> {
   const plugin = tauriNotificationPlugin();
-  if (!plugin?.sendNotification) return;
-  void (async () => {
-    try {
-      let granted = await plugin.isPermissionGranted?.();
-      if (!granted && plugin.requestPermission) {
-        granted = (await plugin.requestPermission()) === "granted";
-      }
-      if (granted) {
-        plugin.sendNotification?.(notificationText(n));
-      }
-    } catch (err) {
-      console.warn("native notification failed", err);
+  if (!plugin?.sendNotification) return false;
+  try {
+    let granted = await plugin.isPermissionGranted?.();
+    if (!granted && plugin.requestPermission) {
+      granted = (await plugin.requestPermission()) === "granted";
     }
-  })();
+    if (!granted) return false;
+    plugin.sendNotification?.(notificationText(n));
+    return true;
+  } catch (err) {
+    console.warn("native notification failed", err);
+    return false;
+  }
 }
 
 /** Render the localized title/body for a decided notification. The
