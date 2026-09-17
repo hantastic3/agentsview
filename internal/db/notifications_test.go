@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -36,12 +37,36 @@ func withNextOrdinal(n int) func(*Session) {
 	return func(s *Session) { s.NextOrdinal = n }
 }
 
-// setModifiedAt stamps local_modified_at directly: the column is
-// owned by the sync write path, not UpsertSession.
+// setModifiedAt stamps transcript_modified_at directly: the column
+// is owned by the transcript-mutation write path, not UpsertSession.
+// Candidate discovery reads this column, so a test that wants a
+// session to look like it just spoke sets it here.
 func setModifiedAt(t *testing.T, d *DB, id, ts string) {
 	t.Helper()
 	_, err := d.getWriter().Exec(
+		`UPDATE sessions SET transcript_modified_at = ? WHERE id = ?`,
+		ts, id)
+	require.NoError(t, err)
+}
+
+// setLocalModifiedAt stamps only the push-eligibility marker, the
+// way a metadata-only write (rename, subagent relinking, secret
+// rescan) does. It must never make a session a notification
+// candidate.
+func setLocalModifiedAt(t *testing.T, d *DB, id, ts string) {
+	t.Helper()
+	_, err := d.getWriter().Exec(
 		`UPDATE sessions SET local_modified_at = ? WHERE id = ?`, ts, id)
+	require.NoError(t, err)
+}
+
+// trashSession marks a session deleted the way the sync pipeline
+// does when its source disappears.
+func trashSession(t *testing.T, d *DB, id string) {
+	t.Helper()
+	_, err := d.getWriter().Exec(
+		`UPDATE sessions SET deleted_at = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), id)
 	require.NoError(t, err)
 }
 
@@ -63,15 +88,28 @@ func TestNotificationCandidates(t *testing.T) {
 		withNextOrdinal(10))
 	notifTestSession(t, d, "pending",
 		withTermination("tool_call_pending"), withNextOrdinal(8))
+	// Metadata-only churn: local_modified_at moves, the transcript
+	// does not. It must not produce a candidate.
+	notifTestSession(t, d, "metadata-only",
+		withTermination("awaiting_user"), withNextOrdinal(10))
+	// A session whose source vanished: deleted, so nobody is
+	// waiting on it.
+	notifTestSession(t, d, "trashed",
+		withTermination("awaiting_user"), withNextOrdinal(10))
 
 	setModifiedAt(t, d, "turn-end", post)
 	setModifiedAt(t, d, "pre-ready", pre)
 	setModifiedAt(t, d, "unclassified", post)
 	setModifiedAt(t, d, "pending", post)
+	setLocalModifiedAt(t, d, "metadata-only", post)
+	setModifiedAt(t, d, "trashed", post)
+	trashSession(t, d, "trashed")
 	// ended_with_role is a signals column: stamp it like the sync
 	// engine's signal pass would.
 	updateSignals(t, d, "turn-end", SessionSignalUpdate{EndedWithRole: "assistant"})
 	updateSignals(t, d, "pending", SessionSignalUpdate{EndedWithRole: "assistant"})
+	updateSignals(t, d, "metadata-only", SessionSignalUpdate{EndedWithRole: "assistant"})
+	updateSignals(t, d, "trashed", SessionSignalUpdate{EndedWithRole: "assistant"})
 
 	cands, err := d.NotificationCandidates(
 		ctx, notify.Cursor{Since: since}, readyAt, 64)
@@ -82,18 +120,110 @@ func TestNotificationCandidates(t *testing.T) {
 	}
 	assert.Contains(t, ids, "turn-end")
 	assert.Contains(t, ids, "pending")
+	// No termination status is not a reason to hide a session: the
+	// Decider decides turn_end versus new_reply, discovery must not
+	// pre-empt it.
+	assert.Contains(t, ids, "unclassified")
 	assert.NotContains(t, ids, "no-modified")
 	assert.NotContains(t, ids, "pre-ready")
-	assert.NotContains(t, ids, "unclassified")
+	assert.NotContains(t, ids, "metadata-only",
+		"a metadata-only local_modified_at bump is not transcript activity")
+	assert.NotContains(t, ids, "trashed",
+		"a deleted session must never notify")
 
 	for _, c := range cands {
 		if c.SessionID == "turn-end" {
 			assert.Equal(t, int64(10), c.NextOrdinal)
 			assert.Equal(t, "awaiting_user", c.TerminationStatus)
 			assert.Equal(t, "assistant", c.LastRole)
-			assert.False(t, c.LocalModifiedAt.IsZero())
+			assert.False(t, c.TranscriptModifiedAt.IsZero())
 		}
 	}
+}
+
+// TestTranscriptModifiedAtTracksOnlyTranscriptChanges pins the
+// marker candidate discovery reads: it moves when the transcript
+// moves and stays put for everything else, which is exactly what
+// local_modified_at does not do.
+func TestTranscriptModifiedAtTracksOnlyTranscriptChanges(t *testing.T) {
+	d := testDB(t)
+	notifTestSession(t, d, "s1")
+
+	var before sql.NullString
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT transcript_modified_at FROM sessions WHERE id = ?`,
+		"s1",
+	).Scan(&before))
+	assert.False(t, before.Valid,
+		"a session whose transcript was never written has no marker")
+
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID: "s1", Ordinal: 0, Role: "user",
+		Content: "hello", ContentLength: len("hello"),
+	}}))
+	var after string
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT transcript_modified_at FROM sessions WHERE id = ?`,
+		"s1",
+	).Scan(&after))
+	assert.NotEmpty(t, after, "appending messages stamps the marker")
+
+	name := "renamed"
+	require.NoError(t, d.RenameSession("s1", &name))
+	var renamed, localModified string
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT COALESCE(transcript_modified_at, ''),
+		        COALESCE(local_modified_at, '')
+		 FROM sessions WHERE id = ?`,
+		"s1",
+	).Scan(&renamed, &localModified))
+	assert.NotEmpty(t, localModified, "the rename did write to the row")
+	assert.Equal(t, after, renamed,
+		"a rename is metadata, not transcript activity")
+}
+
+// TestNotificationCandidatesIsNotPushEligibilityChurn proves the
+// candidate scan reads the transcript marker and not
+// local_modified_at, which every metadata-only write bumps.
+func TestNotificationCandidatesIsNotPushEligibilityChurn(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	readyAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	post := readyAt.Add(time.Minute).Format(time.RFC3339Nano)
+
+	notifTestSession(t, d, "renamed",
+		withTermination("awaiting_user"), withNextOrdinal(10))
+	// What a rename, a subagent relink, or a secret rescan leaves
+	// behind: a fresh local_modified_at and nothing else.
+	setLocalModifiedAt(t, d, "renamed", post)
+
+	cands, err := d.NotificationCandidates(
+		ctx, notify.Cursor{Since: readyAt.Add(-time.Minute)}, readyAt, 64)
+	require.NoError(t, err)
+	assert.Empty(t, candidateIDs(cands))
+}
+
+// TestNotificationCandidatesSkipsDeletedSessions covers the other
+// half of the same predicate: a trashed session is not waiting for
+// anyone, even when its transcript moved a second ago.
+func TestNotificationCandidatesSkipsDeletedSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	readyAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	post := readyAt.Add(time.Minute).Format(time.RFC3339Nano)
+
+	notifTestSession(t, d, "gone",
+		withTermination("awaiting_user"), withNextOrdinal(10))
+	notifTestSession(t, d, "alive",
+		withTermination("awaiting_user"), withNextOrdinal(10))
+	setModifiedAt(t, d, "gone", post)
+	setModifiedAt(t, d, "alive", post)
+	trashSession(t, d, "gone")
+
+	cands, err := d.NotificationCandidates(
+		ctx, notify.Cursor{Since: readyAt.Add(-time.Minute)}, readyAt, 64)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alive"}, candidateIDs(cands))
 }
 
 func TestNotificationCandidatesCarriesLastMessage(t *testing.T) {
@@ -177,7 +307,10 @@ func TestNotificationCandidatesTiedBurstDrains(t *testing.T) {
 			seen[c.SessionID]++
 		}
 		last := cands[len(cands)-1]
-		cursor = notify.Cursor{Since: last.LocalModifiedAt, ID: last.SessionID}
+		cursor = notify.Cursor{
+			Since: last.TranscriptModifiedAt,
+			ID:    last.SessionID,
+		}
 	}
 	require.Len(t, seen, total, "every tied session must drain")
 	for id, n := range seen {

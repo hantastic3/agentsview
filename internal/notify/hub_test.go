@@ -14,7 +14,7 @@ import (
 )
 
 // storeTimestamp renders a time the way every writer of
-// sessions.local_modified_at does: fixed width, always three
+// sessions.transcript_modified_at does: fixed width, always three
 // fractional digits. The fakes must compare candidates in this
 // text domain (not time.Time) or they would hide both the
 // trailing-zero and the tie bugs the archive query is vulnerable
@@ -27,7 +27,7 @@ func storeTimestamp(t time.Time) string {
 // the cursor in the (timestamp, id) ordering, with an empty id
 // meaning a plain strictly-greater time bound.
 func afterCursor(s Snapshot, cursor Cursor) bool {
-	ts, since := storeTimestamp(s.LocalModifiedAt), storeTimestamp(cursor.Since)
+	ts, since := storeTimestamp(s.TranscriptModifiedAt), storeTimestamp(cursor.Since)
 	if ts != since {
 		return ts > since
 	}
@@ -35,7 +35,8 @@ func afterCursor(s Snapshot, cursor Cursor) bool {
 }
 
 func byStoreOrder(x, y Snapshot) int {
-	tx, ty := storeTimestamp(x.LocalModifiedAt), storeTimestamp(y.LocalModifiedAt)
+	tx, ty := storeTimestamp(x.TranscriptModifiedAt),
+		storeTimestamp(y.TranscriptModifiedAt)
 	if tx != ty {
 		if tx < ty {
 			return -1
@@ -71,7 +72,7 @@ func (f *fakeStore) NotificationCandidates(
 	// the (timestamp, id) cursor, the ordering, and the cap.
 	var out []Snapshot
 	for _, s := range f.candidates {
-		if !s.LocalModifiedAt.After(readyAt) {
+		if !s.TranscriptModifiedAt.After(readyAt) {
 			continue
 		}
 		if !afterCursor(s, cursor) {
@@ -144,13 +145,13 @@ func (s *corruptStateStore) NotificationState(
 
 func hubTestSnapshot(id string, ordinal int64, mods ...func(*Snapshot)) Snapshot {
 	s := Snapshot{
-		SessionID:         id,
-		Project:           "proj",
-		Agent:             "claude",
-		TerminationStatus: "awaiting_user",
-		NextOrdinal:       ordinal,
-		LastRole:          "assistant",
-		LocalModifiedAt:   readyAt.Add(time.Minute),
+		SessionID:            id,
+		Project:              "proj",
+		Agent:                "claude",
+		TerminationStatus:    "awaiting_user",
+		NextOrdinal:          ordinal,
+		LastRole:             "assistant",
+		TranscriptModifiedAt: readyAt.Add(time.Minute),
 	}
 	for _, m := range mods {
 		m(&s)
@@ -270,7 +271,7 @@ func TestHubBurstExceedingCandidateCapNotifiesEverySession(t *testing.T) {
 		modified := base.Add(time.Duration(i) * time.Millisecond)
 		store.candidates = append(store.candidates,
 			hubTestSnapshot(id, 10, func(s *Snapshot) {
-				s.LocalModifiedAt = modified
+				s.TranscriptModifiedAt = modified
 			}))
 	}
 
@@ -304,7 +305,7 @@ func TestHubBurstExceedingCandidateCapNotifiesEverySession(t *testing.T) {
 
 // TestHubBurstWithTiedTimestampsNotifiesEverySession covers the
 // tie case the distinct-timestamp burst above cannot see: a single
-// sync pass stamps many sessions with one local_modified_at, and a
+// sync pass stamps many sessions with one transcript_modified_at, and a
 // timestamp-only resume cursor would skip every unprocessed row
 // that ties with the full batch's newest. The clock advances past
 // the look-back window between checks, matching production cadence.
@@ -316,7 +317,7 @@ func TestHubBurstWithTiedTimestampsNotifiesEverySession(t *testing.T) {
 		id := fmt.Sprintf("tie-%03d", i)
 		store.candidates = append(store.candidates,
 			hubTestSnapshot(id, 10, func(s *Snapshot) {
-				s.LocalModifiedAt = tie
+				s.TranscriptModifiedAt = tie
 			}))
 	}
 

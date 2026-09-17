@@ -15,15 +15,15 @@ var (
 
 func turnEndSnapshot(mods ...func(*Snapshot)) Snapshot {
 	s := Snapshot{
-		SessionID:         "s1",
-		Project:           "proj",
-		Agent:             "claude",
-		DisplayName:       "Fix the login bug",
-		TerminationStatus: "awaiting_user",
-		NextOrdinal:       10,
-		LastRole:          "assistant",
-		LocalModifiedAt:   after,
-		LastMessage:       "Done — tests pass.",
+		SessionID:            "s1",
+		Project:              "proj",
+		Agent:                "claude",
+		DisplayName:          "Fix the login bug",
+		TerminationStatus:    "awaiting_user",
+		NextOrdinal:          10,
+		LastRole:             "assistant",
+		TranscriptModifiedAt: after,
+		LastMessage:          "Done — tests pass.",
 	}
 	for _, m := range mods {
 		m(&s)
@@ -180,7 +180,7 @@ func TestDeciderGates(t *testing.T) {
 	t.Run("initial sync and resync churn stay silent", func(t *testing.T) {
 		d := NewDecider(enabledCfg, func() time.Time { return now })
 		s := turnEndSnapshot(func(s *Snapshot) {
-			s.LocalModifiedAt = readyAt.Add(-time.Hour)
+			s.TranscriptModifiedAt = readyAt.Add(-time.Hour)
 		})
 		assert.Nil(t, d.Decide(s, State{}, readyAt))
 	})

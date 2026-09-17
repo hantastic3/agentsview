@@ -15,7 +15,7 @@ import (
 // live in the existing archive_metadata KV (one row per session)
 // and the diagnostics event log is a bounded JSON ring under a
 // single key. The authoritative per-session facts it reads —
-// termination_status, next_ordinal, local_modified_at — are
+// termination_status, next_ordinal, transcript_modified_at — are
 // maintained by the normal sync pipeline, so resyncs and backend
 // swaps carry notification state with the archive.
 
@@ -38,7 +38,7 @@ const (
 
 // notificationTimestampLayout must stay byte-identical to the
 // strftime('%Y-%m-%dT%H:%M:%fZ') that every writer of
-// sessions.local_modified_at uses: fixed width, always three
+// sessions.transcript_modified_at uses: fixed width, always three
 // fractional digits. time.RFC3339Nano must not be used here — it
 // strips trailing zeros (".060" becomes ".06"), which sorts *above*
 // ".061"..".069" under the text comparison this query relies on,
@@ -47,24 +47,38 @@ const notificationTimestampLayout = "2006-01-02T15:04:05.000Z"
 
 // NotificationCandidates returns sessions whose transcript changed
 // after cursor AND after the daemon's readyAt snapshot, ordered by
-// (local_modified_at, id) ascending and bounded to limit rows (or
-// notificationCandidateCap when limit <= 0).
+// (transcript_modified_at, id) ascending and bounded to limit rows
+// (or notificationCandidateCap when limit <= 0).
 //
 // The cursor is a total lower bound in that same ordering: a row
 // qualifies when its timestamp is strictly greater than the
 // cursor's, or — when the cursor carries a session id — equal to it
 // with a greater id. That tiebreak is load-bearing: the Hub
 // processes the batch and resumes after the last row it saw, and
-// rows sharing one local_modified_at are normal (a single sync pass
-// stamps many sessions with the same strftime('now') value), so a
-// timestamp-only cursor would drop every unprocessed row that ties
+// rows sharing one transcript_modified_at are normal (a single sync
+// pass stamps many sessions with the same strftime('now') value), so
+// a timestamp-only cursor would drop every unprocessed row that ties
 // with the batch's newest. An empty cursor id is a plain, strictly
 // greater time bound (the look-back overlap). Ordering and
 // comparison must stay consistent.
 //
-// Metadata-only mutations never touch local_modified_at, and
-// initial sync / history rebuilds operate on pre-readyAt content,
-// so both stay silent by construction.
+// The scan reads transcript_modified_at, not local_modified_at.
+// local_modified_at is a push-eligibility marker: renames, subagent
+// relinking, secret rescans, and signal backfills all bump it, and
+// none of them is transcript activity. Using it here would fire a
+// turn-end toast for a session nobody spoke to.
+// transcript_modified_at is written only by the transcript-mutation
+// path, so metadata churn stays silent by construction.
+//
+// Termination status is deliberately not a predicate: whether a
+// candidate has a reliable end-of-turn signal (turn_end) or needs
+// the new-reply fallback is the Decider's call, made against the
+// persisted per-session state. Filtering here would hide every
+// unclassified session from the fallback. Deleted sessions are
+// excluded outright: a trashed session is not waiting for anyone.
+//
+// Initial sync / history rebuilds operate on pre-readyAt content and
+// stay silent through the readyAt bound.
 func (d *DB) NotificationCandidates(
 	ctx context.Context, cursor notify.Cursor, readyAt time.Time, limit int,
 ) ([]notify.Snapshot, error) {
@@ -78,22 +92,21 @@ func (d *DB) NotificationCandidates(
 		       COALESCE(s.termination_status, ''),
 		       s.next_ordinal,
 		       COALESCE(s.ended_with_role, ''),
-		       COALESCE(s.local_modified_at, ''),
+		       COALESCE(s.transcript_modified_at, ''),
 		       COALESCE(s.relationship_type, ''),
 		       s.is_automated,
 		       (SELECT m.content FROM messages m
 		        WHERE m.session_id = s.id
 		        ORDER BY m.ordinal DESC LIMIT 1) AS last_content
 		FROM sessions s
-		WHERE s.termination_status IS NOT NULL
-		  AND s.termination_status != ''
+		WHERE s.deleted_at IS NULL
 		  AND s.next_ordinal > 0
-		  AND (COALESCE(s.local_modified_at, '') > ?
+		  AND (COALESCE(s.transcript_modified_at, '') > ?
 		       OR (? != ''
-		           AND COALESCE(s.local_modified_at, '') = ?
+		           AND COALESCE(s.transcript_modified_at, '') = ?
 		           AND s.id > ?))
-		  AND COALESCE(s.local_modified_at, '') > ?
-		ORDER BY s.local_modified_at ASC, s.id ASC
+		  AND COALESCE(s.transcript_modified_at, '') > ?
+		ORDER BY s.transcript_modified_at ASC, s.id ASC
 		LIMIT ?`,
 		since, cursor.ID, since, cursor.ID,
 		readyAt.UTC().Format(notificationTimestampLayout),
@@ -130,7 +143,7 @@ func (d *DB) NotificationCandidates(
 		s.IsAutomated = automated != 0
 		if modified != "" {
 			if t, err := time.Parse(time.RFC3339Nano, modified); err == nil {
-				s.LocalModifiedAt = t
+				s.TranscriptModifiedAt = t
 			}
 		}
 		if content.Valid {

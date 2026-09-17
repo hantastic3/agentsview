@@ -63,9 +63,14 @@ type Snapshot struct {
 	TerminationStatus string
 	// NextOrdinal is the archive's next-message ordinal: a
 	// monotone cursor over how much content has been parsed.
-	NextOrdinal     int64
-	LastRole        string
-	LocalModifiedAt time.Time
+	NextOrdinal int64
+	LastRole    string
+	// TranscriptModifiedAt is when the transcript itself last
+	// changed. It is deliberately not the session row's
+	// local_modified_at: that one also moves for metadata-only
+	// writes (renames, relinking, rescans), which are not
+	// transcript activity and must not look like one.
+	TranscriptModifiedAt time.Time
 	// RelationshipType is non-empty for sessions derived from a
 	// parent (subagent, continuation, fork).
 	RelationshipType string
@@ -146,7 +151,7 @@ func (d *Decider) Decide(s Snapshot, st State, readyAt time.Time) *Decision {
 	if !cfg.Enabled {
 		return nil
 	}
-	if !s.LocalModifiedAt.After(readyAt) {
+	if !s.TranscriptModifiedAt.After(readyAt) {
 		return nil
 	}
 	if cfg.SuppressSubagents && s.RelationshipType == "subagent" {

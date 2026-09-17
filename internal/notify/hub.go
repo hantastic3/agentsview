@@ -16,7 +16,7 @@ import (
 const candidateBatchLimit = 64
 
 // Cursor is the exclusive lower bound of the next candidate batch,
-// in the store's (local_modified_at, session id) ordering. An empty
+// in the store's (transcript_modified_at, session id) ordering. An empty
 // ID is a plain, strictly greater time bound (the look-back
 // overlap); a set ID extends the bound to ties on Since. The store
 // serialises Since in the column's own format. The Hub never
@@ -32,7 +32,7 @@ type Cursor struct {
 // notification path's point of view.
 type Store interface {
 	// NotificationCandidates returns recently changed sessions
-	// worth evaluating, in the store's (local_modified_at, id)
+	// worth evaluating, in the store's (transcript_modified_at, id)
 	// ascending order and bounded by limit. A row qualifies when
 	// its timestamp is strictly newer than readyAt and strictly
 	// greater than cursor in that ordering: newer than cursor.Since,
@@ -201,7 +201,7 @@ func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 // cursor and decider reference are taken under the mutex.
 //
 // The store returns the oldest candidates first, ordered by
-// (local_modified_at, id), and caps the batch at the requested
+// (transcript_modified_at, id), and caps the batch at the requested
 // limit. A full batch means the store may still hold newer
 // candidates, so the cursor advances to the exact (timestamp, id)
 // of the last candidate processed and the next check resumes
@@ -268,7 +268,10 @@ func (h *Hub) Check(ctx context.Context) {
 		// store's ordering, so rows sharing its timestamp are
 		// not skipped.
 		last := candidates[len(candidates)-1]
-		h.cursor = Cursor{Since: last.LocalModifiedAt, ID: last.SessionID}
+		h.cursor = Cursor{
+			Since: last.TranscriptModifiedAt,
+			ID:    last.SessionID,
+		}
 		h.backlog = true
 	} else {
 		// The window is exhausted; close it.
