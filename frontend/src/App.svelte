@@ -804,8 +804,9 @@
     }
   });
 
+  const notificationsEnabled = $derived(sync.isDesktop && settings.notifications.enabled);
   $effect(() => {
-    if (sync.isDesktop && settings.notifications.enabled) {
+    if (notificationsEnabled) {
       return startNotificationWatcher(
         () => settings.notifications.notify_new_reply,
         () => router.route === "sessions" ? sessions.activeSessionId : null,

@@ -16431,6 +16431,9 @@ type GetAPIV1SessionsQuery struct {
 	// IncludeChildren Include child sessions
 	IncludeChildren *bool `json:"include_children,omitempty"`
 
+	// EachRow Apply filters to each session row, children included, without grouping by root
+	EachRow *bool `json:"each_row,omitempty"`
+
 	// IncludeSource Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
 	IncludeSource *bool `json:"include_source,omitempty"`
 

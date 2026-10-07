@@ -88,9 +88,10 @@ describe("desktop notification watcher", () => {
     expect(messages).not.toHaveBeenCalled();
     expect(list.mock.calls[0]![0]).toMatchObject({
       active_since: "2026-10-07T11:50:00.000Z",
-      include_children: true,
+      each_row: true,
       include_one_shot: true,
     });
+    expect(list.mock.calls[0]![0]?.include_children).toBeUndefined();
   });
   it("toasts a waiting transition once and a later user turn", async () => {
     await start();
@@ -113,17 +114,16 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("The agent finished this turn and is waiting for you.");
     await change({ message_count: 4 });
-    expect(messages).toHaveBeenCalledTimes(2);
+    expect(messages).not.toHaveBeenCalled();
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
   it("toasts a newly discovered waiting session", async () => {
     await start();
-    await change({ id: "new", termination_status: "awaiting_user" });
+    await change({ id: "new", termination_status: "awaiting_user", ended_at: "2026-10-07T12:00:01Z" });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
   it.each([
     { relationship_type: "subagent" },
-    { ended_at: "2026-10-07T11:49:59Z" },
   ])("keeps excluded sessions silent: %j", async (patch) => {
     await start(true);
     await change({ ...patch, termination_status: "awaiting_user", message_count: 4 });
@@ -176,16 +176,16 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
-  it("toasts new assistant prose once and ignores a same-timestamp rewrite", async () => {
+  it("toasts the newest new assistant prose once per refresh", async () => {
     await start(true);
     await change({ message_count: 3 });
-    expect(messages).toHaveBeenCalledWith({ id: "session" }, { direction: "desc", limit: 20 });
+    expect(messages).toHaveBeenCalledWith({ id: "session" }, { direction: "desc", limit: 1 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
     await change();
-    messages.mockResolvedValue({ messages: [reply({ content: "Rewritten reply" })], count: 1 });
+    messages.mockResolvedValue({ messages: [reply({ content: "Another reply" })], count: 1 });
     await change({ message_count: 4 });
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
   });
   it.each([{ has_tool_use: true }, { role: "user" }, { content: "  " }])(
     "ignores a latest message without assistant prose: %j",
@@ -199,7 +199,7 @@ describe("desktop notification watcher", () => {
   it("skips system rows when finding the newest reply", async () => {
     messages.mockResolvedValue({ messages: [reply({ is_system: true }), reply()], count: 2 });
     await start(true);
-    await change({ message_count: 3 });
+    await change({ message_count: 4 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
   it.each([{ has_tool_use: true }, { role: "user" }])(
@@ -214,18 +214,16 @@ describe("desktop notification watcher", () => {
       await change({ message_count: 5 });
       expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
       expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Latest text");
-      messages.mockResolvedValue({ messages: [reply({ content: "Older text", timestamp: "2026-10-07T12:00:02Z" })], count: 1 });
-      await change({ message_count: 6 });
-      expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     },
   );
-  it("retries a failed reply read without consuming the count or timestamp", async () => {
+  it("retries a failed reply read without consuming the count", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await start(true);
     messages.mockRejectedValueOnce(new Error("unavailable"));
     await change({ message_count: 3 });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change();
+    await change({ message_count: 4 });
+    expect(messages).toHaveBeenLastCalledWith({ id: "session" }, { direction: "desc", limit: 2 });
     expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
@@ -233,13 +231,38 @@ describe("desktop notification watcher", () => {
     expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
-  it("delivers the waiting toast even when the reply read fails", async () => {
+  it("never reads replies for waiting rows, including after a failed read", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    messages.mockRejectedValue(new Error("unavailable"));
     await start(true);
+    messages.mockRejectedValueOnce(new Error("unavailable"));
+    await change({ message_count: 3 });
     await change({ termination_status: "awaiting_user", message_count: 4 });
     await change();
+    expect(messages).toHaveBeenCalledOnce();
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it("keeps restored rows silent and reads nothing for unseen rows", async () => {
+    await start(true);
+    await change({ id: "restored", termination_status: "awaiting_user", ended_at: "2026-10-07T11:59:00Z" });
+    await change({ id: "new-running", termination_status: "", message_count: 8 });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(messages).not.toHaveBeenCalled();
+  });
+  it("recovers missed events within five minutes and clears the poll on stop", async () => {
+    await start();
+    row = { ...row, termination_status: "awaiting_user" };
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledTimes(2);
+    stop!();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+  it("caps a burst reply read at fifty rows", async () => {
+    await start(true);
+    await change({ message_count: 100 });
+    expect(messages).toHaveBeenCalledWith({ id: "session" }, { direction: "desc", limit: 50 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("does no reads or delivery when permission is denied", async () => {
     plugin.isPermissionGranted.mockResolvedValue(false);

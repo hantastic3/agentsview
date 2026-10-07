@@ -2464,11 +2464,12 @@
   "settings_notifications_title": "Desktop notifications",
   "settings_notifications_description": "Get notified when an agent finishes its turn or sends a new reply",
   "settings_notifications_keywords": "notifications alert desktop notify turn reply",
+  "settings_notifications_unavailable": "Desktop notifications are unavailable in this app.",
   "settings_notifications_permission_denied": "Notification permission was denied. Allow notifications for AgentsView in your system settings.",
   "settings_notifications_enable": "Enable desktop notifications",
   "settings_notifications_turn_end_hint": "Desktop app only. You are notified when an agent finishes its turn and waits for you.",
   "settings_notifications_new_reply": "Also notify on new replies",
-  "settings_notifications_new_reply_hint": "Send one notification when new assistant text replies arrive.",
+  "settings_notifications_new_reply_hint": "While the agent is still working, notify with its newest new text reply. One notification per refresh.",
   "notification_turn_end_body": "The agent finished this turn and is waiting for you.",
   "notification_new_reply_title_suffix": "{name}: new reply",
   "notification_turn_end_title_suffix": "{name}: reply finished"

@@ -111,3 +111,20 @@ it("explains denied permission when enabled settings load", async () => {
   );
   expect(SettingsService.putApiV1Settings).not.toHaveBeenCalled();
 });
+
+it.each(["Enable desktop notifications", "Also notify on new replies"])("reverts %s after a failed save", async (name) => {
+  settings.notifications.enabled = name === "Also notify on new replies";
+  vi.stubGlobal("__TAURI__", { notification: { isPermissionGranted: vi.fn().mockResolvedValue(true) } });
+  vi.mocked(SettingsService.putApiV1Settings).mockRejectedValueOnce(new Error("save failed"));
+  const { getByRole } = render(NotificationsSettings);
+  const toggle = getByRole("switch", { name }) as HTMLInputElement;
+  await fireEvent.click(toggle);
+  await waitFor(() => expect(toggle.checked).toBe(false));
+  expect(settings.saveError).toBe("save failed");
+});
+
+it("explains an unavailable notification bridge", () => {
+  const { getByRole } = render(NotificationsSettings);
+  expect(getByRole("status").textContent).toBe("Desktop notifications are unavailable in this app.");
+  expect(getByRole("switch", { name: "Enable desktop notifications" }).hasAttribute("disabled")).toBe(true);
+});

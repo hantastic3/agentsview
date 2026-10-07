@@ -178,9 +178,10 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Incremental turn status (2026-10-07):** Rechecked `message.stop_reason`
   against the stored Claude fixtures, full parser, and incremental tail tests.
-  A tail containing a non-system assistant message uses `Classify` and its
-  last assistant `stop_reason`; `end_turn` means `awaiting_user` when the
-  assistant is last. User-only and tool-result-only tails return no verdict,
+  A tail containing a non-system assistant message or tool results uses
+  `Classify` and its last assistant `stop_reason`. In fixtures, `end_turn`
+  means `awaiting_user` when the assistant is last. Tool-result interrupt
+  tails clear a pending tool status. User-only tails return no verdict,
   clearing stored status when the message count changes. Empty tool-result
   carriers are filtered before storage and keep the count and status unchanged.
   Metadata-only and system-only tails keep the stored status, including

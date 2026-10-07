@@ -190,6 +190,30 @@ func TestSessionFilterActiveSince(t *testing.T) {
 	}
 }
 
+func TestSessionFilterEachRowActiveSince(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "old-parent", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-01T11:00:00Z")
+		s.MessageCount = 5
+	})
+	for _, relationship := range []string{"fork", "continuation", "subagent", "deleted"} {
+		insertSession(t, d, relationship, "proj", func(s *Session) {
+			s.ParentSessionID = new("old-parent")
+			s.RelationshipType = relationship
+			s.EndedAt = new("2024-06-03T10:00:00Z")
+			s.MessageCount = 5
+		})
+	}
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
+	filter := SessionFilter{EachRow: true, ActiveSince: "2024-06-03T00:00:00Z"}
+	requireSessions(t, d, filter, []string{"fork", "continuation", "subagent"})
+	page, err := d.ListSessions(t.Context(), filter)
+	require.NoError(t, err)
+	for _, row := range page.Sessions {
+		assert.Equal(t, row.ID, row.RelationshipType)
+	}
+}
+
 func TestSessionFilterMinUserMessages(t *testing.T) {
 	d := testDB(t)
 

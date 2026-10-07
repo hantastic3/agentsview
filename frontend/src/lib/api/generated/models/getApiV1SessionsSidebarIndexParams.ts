@@ -71,6 +71,10 @@ export type GetApiV1SessionsSidebarIndexParams = {
    */
   include_children?: boolean;
   /**
+   * Apply filters to each session row, children included, without grouping by root
+   */
+  each_row?: boolean;
+  /**
    * Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
    */
   include_source?: boolean;

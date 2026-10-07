@@ -569,6 +569,7 @@ type SessionFilter struct {
 	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
 	AutomatedScope     string   // "", "human", "all", or "automated"
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
+	EachRow            bool     // apply filters to each row, including children
 	IncludeEmpty       bool     // include zero-message sessions for project mapping
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
 	IncludeSource      bool     // include the session source file path in list rows
@@ -3079,7 +3080,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			termination_status = CASE WHEN ? IS NULL AND (message_count = ? OR message_count + (
+			termination_status = CASE WHEN ? IS NULL AND (message_count + (
 				SELECT COUNT(*) FROM messages
 				WHERE session_id = sessions.id AND ordinal >= sessions.next_ordinal AND is_system = 1
 			) = ?) THEN termination_status ELSE ? END,
@@ -3095,7 +3096,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
 		update.HasTotalOutputTokens, update.HasPeakContextTokens,
-		update.TerminationStatus, update.MsgCount, update.MsgCount, update.TerminationStatus, id,
+		update.TerminationStatus, update.MsgCount, update.TerminationStatus, id,
 	)
 	if err != nil {
 		return fmt.Errorf(

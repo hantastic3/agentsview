@@ -1610,6 +1610,24 @@ func TestListSessions_ExcludeProjectFilter(t *testing.T) {
 	}
 }
 
+func TestListSessions_EachRowActiveSince(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "old-parent", "proj", 5, func(s *db.Session) {
+		s.EndedAt = new("2024-01-01T11:00:00Z")
+	})
+	te.seedSession(t, "recent-fork", "proj", 5, func(s *db.Session) {
+		s.ParentSessionID = new("old-parent")
+		s.RelationshipType = "fork"
+		s.EndedAt = new("2024-06-03T10:00:00Z")
+	})
+	w := te.get(t, "/api/v1/sessions?each_row=true&include_one_shot=true&active_since=2024-06-03T00:00:00Z")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[sessionListResponse](t, w)
+	require.Len(t, resp.Sessions, 1)
+	assert.Equal(t, "recent-fork", resp.Sessions[0].ID)
+	assert.Equal(t, "fork", resp.Sessions[0].RelationshipType)
+}
+
 func TestListSessions_ExcludeOneShotDefault(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {

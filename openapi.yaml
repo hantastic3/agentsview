@@ -17490,6 +17490,13 @@ paths:
           schema:
             description: Include child sessions
             type: boolean
+        - description: Apply filters to each session row, children included, without grouping by root
+          explode: false
+          in: query
+          name: each_row
+          schema:
+            description: Apply filters to each session row, children included, without grouping by root
+            type: boolean
         - description: Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
           explode: false
           in: query
@@ -17861,6 +17868,13 @@ paths:
           name: include_children
           schema:
             description: Include child sessions
+            type: boolean
+        - description: Apply filters to each session row, children included, without grouping by root
+          explode: false
+          in: query
+          name: each_row
+          schema:
+            description: Apply filters to each session row, children included, without grouping by root
             type: boolean
         - description: Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
           explode: false
