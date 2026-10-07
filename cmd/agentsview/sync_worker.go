@@ -25,6 +25,9 @@ import (
 // guard.
 const syncWorkerChildEnvVar = "AGENTSVIEW_SYNC_WORKER"
 
+// Reserve most of the frame for stats and other result fields.
+const workerWrittenSessionsMax = workerLineMaxBytes / 4096
+
 // runningAsSyncWorker reports whether this process is a sync-worker child
 // spawned by a daemon that has yielded write ownership for the pass.
 func runningAsSyncWorker() bool {
@@ -193,7 +196,7 @@ func runSyncWorkerStartup(
 	}
 	defer closeWriteDB(database, writeLock)
 	var writtenSessions []string
-	if cfg.Notifications.Enabled {
+	if cfg.Notifications.Enabled && mode != "startup" {
 		written := make(map[string]bool)
 		database.SetSessionWriteObserver(func(ids []string) {
 			for _, id := range ids {
@@ -292,6 +295,9 @@ func recentWrittenSessions(ctx context.Context, database *db.DB, ids []string, n
 		endedAt, err := time.Parse(time.RFC3339Nano, *session.EndedAt)
 		if err == nil && now.Sub(endedAt) <= notify.FreshnessWindow {
 			recent = append(recent, id)
+			if len(recent) == workerWrittenSessionsMax {
+				break
+			}
 		}
 	}
 	return recent

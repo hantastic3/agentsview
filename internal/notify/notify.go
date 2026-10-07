@@ -21,8 +21,9 @@ type Notification struct {
 }
 
 type messageIdentity struct {
-	ordinal   int
-	timestamp string
+	sourceUUID string
+	ordinal    int
+	timestamp  string
 }
 
 const FreshnessWindow = 10 * time.Minute
@@ -44,7 +45,7 @@ type Hub struct {
 	now     func() time.Time
 	since   time.Time
 	mu      sync.Mutex
-	pending map[string]bool // True after a failed read was logged.
+	pending map[string]int // Failed read attempts.
 	wake    chan struct{}
 	seen    map[string]notifiedMessage
 }
@@ -52,7 +53,7 @@ type Hub struct {
 func New(store *db.DB, cfg func() config.NotificationsConfig, publish func(Notification)) *Hub {
 	return &Hub{
 		store: store, cfg: cfg, publish: publish, now: time.Now,
-		since: time.Now(), pending: make(map[string]bool), wake: make(chan struct{}, 1),
+		since: time.Now(), pending: make(map[string]int), wake: make(chan struct{}, 1),
 		seen: make(map[string]notifiedMessage),
 	}
 }
@@ -62,7 +63,7 @@ func (h *Hub) Enqueue(ids []string) {
 	h.mu.Lock()
 	for _, id := range ids {
 		if _, ok := h.pending[id]; !ok {
-			h.pending[id] = false
+			h.pending[id] = 0
 		}
 	}
 	h.mu.Unlock()
@@ -73,12 +74,28 @@ func (h *Hub) Enqueue(ids []string) {
 }
 
 func (h *Hub) Run(ctx context.Context) {
+	var retry <-chan time.Time
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-h.wake:
-			h.process(ctx)
+		case <-retry:
+			retry = nil
+		}
+		h.process(ctx)
+		h.mu.Lock()
+		hasPending := len(h.pending) > 0
+		h.mu.Unlock()
+		if hasPending && retry == nil {
+			timer = time.NewTimer(3 * time.Second)
+			retry = timer.C
 		}
 	}
 }
@@ -88,7 +105,7 @@ func (h *Hub) process(ctx context.Context) {
 	cfg := h.cfg()
 	h.mu.Lock()
 	ids := h.pending
-	h.pending = make(map[string]bool)
+	h.pending = make(map[string]int)
 	h.mu.Unlock()
 	for id, identity := range h.seen {
 		if now.Sub(identity.at) > FreshnessWindow {
@@ -99,10 +116,10 @@ func (h *Hub) process(ctx context.Context) {
 		h.since = now
 		return
 	}
-	for id, logged := range ids {
+	for id, attempts := range ids {
 		session, err := h.store.GetSession(ctx, id)
 		if err != nil {
-			h.retryRead(ctx, id, logged, err)
+			h.retryRead(ctx, id, attempts, err)
 			continue
 		}
 		if session == nil || session.RelationshipType == "subagent" || session.IsAutomated {
@@ -110,7 +127,7 @@ func (h *Hub) process(ctx context.Context) {
 		}
 		latest, err := h.store.GetLatestNonSystemMessage(ctx, id)
 		if err != nil {
-			h.retryRead(ctx, id, logged, err)
+			h.retryRead(ctx, id, attempts, err)
 			continue
 		}
 		if latest == nil || latest.Role != "assistant" {
@@ -124,6 +141,9 @@ func (h *Hub) process(ctx context.Context) {
 			continue
 		}
 		identity := messageIdentity{ordinal: latest.Ordinal, timestamp: latest.Timestamp}
+		if latest.SourceUUID != "" {
+			identity = messageIdentity{sourceUUID: latest.SourceUUID}
+		}
 		seen, ok := h.seen[id]
 		if !ok || seen.messageIdentity != identity {
 			seen = notifiedMessage{messageIdentity: identity, at: timestamp}
@@ -149,11 +169,16 @@ func (h *Hub) process(ctx context.Context) {
 	}
 }
 
-func (h *Hub) retryRead(ctx context.Context, id string, logged bool, err error) {
-	h.mu.Lock()
-	h.pending[id] = logged || ctx.Err() == nil
-	h.mu.Unlock()
-	if !logged && ctx.Err() == nil {
+func (h *Hub) retryRead(ctx context.Context, id string, attempts int, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	if attempts == 0 {
 		log.Printf("notification read: %v", err)
+	}
+	if attempts < 2 {
+		h.mu.Lock()
+		h.pending[id] = attempts + 1
+		h.mu.Unlock()
 	}
 }

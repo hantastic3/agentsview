@@ -31,7 +31,7 @@
   let active = $state("appearance");
   let searchQuery = $state("");
   let pageElement: HTMLElement;
-  const panels = $derived(settingsPanels());
+  const panels = $derived(settingsPanels().filter((panel) => panel.id !== "notifications" || sync.isDesktop));
 
   function normalizeSearchText(value: string): string {
     return value

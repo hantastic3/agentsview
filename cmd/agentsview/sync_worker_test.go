@@ -104,20 +104,28 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 }
 
 func TestSyncWorkerNotificationSessions(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+	for _, tc := range []struct {
+		mode    string
+		enabled bool
+	}{
+		{mode: "startup", enabled: false},
+		{mode: "startup", enabled: true},
+		{mode: "sync", enabled: false},
+		{mode: "sync", enabled: true},
+	} {
+		t.Run(fmt.Sprintf("%s/enabled=%t", tc.mode, tc.enabled), func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
-			cfg.Notifications.Enabled = enabled
+			cfg.Notifications.Enabled = tc.enabled
 			fresh := time.Now().UTC().Format(time.RFC3339Nano)
 			path := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "session0.jsonl")
 			content := testjsonl.NewSessionBuilder().AddClaudeUser(fresh, "hello").AddClaudeAssistant(fresh, "hi").String()
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 			var out bytes.Buffer
-			require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out))
+			require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: tc.mode}, &out))
 			result, err := readWorkerResult(&out, nil)
 			require.NoError(t, err)
 			assert.Equal(t, 3, result.Synced)
-			if enabled {
+			if tc.enabled && tc.mode != "startup" {
 				assert.Equal(t, []string{"session0"}, result.WrittenSessions)
 			} else {
 				assert.Empty(t, result.WrittenSessions)
@@ -133,31 +141,26 @@ func TestWorkerLargeWrittenSetFitsFrame(t *testing.T) {
 	writes := make([]db.SessionBatchWrite, len(ids))
 	for i := range ids {
 		ids[i] = fmt.Sprintf("%08d-0000-0000-0000-000000000000", i)
-		ended := "2026-01-01T11:49:00Z"
-		if i == 0 {
-			ended = "2026-01-01T12:00:00Z"
-		} else if i == 1 {
-			ended = "2026-01-01T11:50:00Z"
-		}
+		ended := "2026-01-01T12:00:00Z"
 		writes[i].Session = db.Session{ID: ids[i], Agent: "claude", Project: "demo", EndedAt: &ended}
 	}
-	writes[len(writes)-1].Session.EndedAt = nil
-	writes[len(writes)-2].Session.EndedAt = dbtest.Ptr("invalid")
 	_, err := database.WriteSessionBatch(writes)
 	require.NoError(t, err)
 	result := workerResult{Status: "ok", DiscoveryComplete: true, Synced: len(ids), WrittenSessions: ids}
 	unfiltered, err := json.Marshal(workerLine{Result: &result})
 	require.NoError(t, err)
-	require.Greater(t, len(unfiltered), workerLineMaxBytes, "the historical import reproduces the oversized frame")
+	require.Greater(t, len(unfiltered), workerLineMaxBytes, "fresh writes reproduce the oversized frame")
 	result.WrittenSessions = recentWrittenSessions(t.Context(), database, ids, now)
 	wire, err := json.Marshal(workerLine{Result: &result})
 	require.NoError(t, err)
-	assert.Less(t, len(wire)+1, workerLineMaxBytes)
+	assert.Less(t, len(wire)+1, workerLineMaxBytes/4)
 	decoded, err := readWorkerResult(bytes.NewReader(append(wire, '\n')), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", decoded.Status)
 	assert.Equal(t, 27000, decoded.Synced)
-	assert.Equal(t, []string{"00000000-0000-0000-0000-000000000000", "00000001-0000-0000-0000-000000000000"}, decoded.WrittenSessions)
+	require.Len(t, decoded.WrittenSessions, 256)
+	assert.Equal(t, "00000000-0000-0000-0000-000000000000", decoded.WrittenSessions[0])
+	assert.Equal(t, "00000255-0000-0000-0000-000000000000", decoded.WrittenSessions[255])
 }
 
 func TestSyncWorkerAuditModeForwardsReconciliationProgress(t *testing.T) {

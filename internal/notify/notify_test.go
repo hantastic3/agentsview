@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -154,6 +155,56 @@ func TestHubAnswerIdentity(t *testing.T) {
 	}
 }
 
+func TestHubNativeIdentitySurvivesReplacement(t *testing.T) {
+	for _, kind := range []string{"turn_end", "new_reply"} {
+		t.Run(kind, func(t *testing.T) {
+			store := dbtest.OpenTestDB(t)
+			now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			var sent []Notification
+			hub := New(store, func() config.NotificationsConfig {
+				return config.NotificationsConfig{Enabled: true, NotifyNewReply: true}
+			}, func(n Notification) { sent = append(sent, n) })
+			hub.now = func() time.Time { return now }
+			hub.since = now.Add(-time.Second)
+			session := db.Session{ID: "session", Agent: "claude", MessageCount: 2}
+			if kind == "turn_end" {
+				session.TerminationStatus = dbtest.Ptr("awaiting_user")
+			}
+			answer := db.Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "done", Timestamp: now.Format(time.RFC3339Nano), SourceUUID: "answer-id"}
+			for _, moved := range []bool{false, true} {
+				messages := []db.Message{{SessionID: "session", Role: "user", Content: "question"}, answer}
+				if moved {
+					messages = []db.Message{answer}
+					messages[0].Ordinal = 0
+					session.MessageCount = 1
+				}
+				_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{Session: session, ReplaceMessages: true, Messages: messages}})
+				require.NoError(t, err)
+				hub.Enqueue([]string{"session"})
+				hub.process(t.Context())
+				require.Len(t, sent, 1, "moving the same native answer stays silent")
+				assert.Equal(t, kind, sent[0].Kind)
+			}
+		})
+	}
+}
+
+func TestHubReadErrorRetriesAreBounded(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		hub := New(nil, func() config.NotificationsConfig { return config.NotificationsConfig{Enabled: true} }, func(Notification) { t.Error("unexpected notification") })
+		reader := &failingReadStore{failSession: true}
+		hub.store = reader
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go hub.Run(ctx)
+		hub.Enqueue([]string{"session"})
+		synctest.Wait()
+		time.Sleep(30 * time.Second)
+		synctest.Wait()
+		assert.Equal(t, 3, reader.sessionReads)
+	})
+}
+
 func TestHubReplyBehindSystemRows(t *testing.T) {
 	store := dbtest.OpenTestDB(t)
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -235,11 +286,13 @@ func TestHubAssistantRows(t *testing.T) {
 
 type failingReadStore struct {
 	*db.DB
-	failSession bool
-	failMessage bool
+	failSession  bool
+	failMessage  bool
+	sessionReads int
 }
 
 func (s *failingReadStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
+	s.sessionReads++
 	if s.failSession {
 		return nil, errors.New("session read unavailable")
 	}
@@ -253,46 +306,47 @@ func (s *failingReadStore) GetLatestNonSystemMessage(ctx context.Context, id str
 	return s.DB.GetLatestNonSystemMessage(ctx, id)
 }
 
-func TestHubReadErrorRetriesOnNextWake(t *testing.T) {
+func TestHubReadErrorRetriesOnTimer(t *testing.T) {
 	for _, read := range []string{"session", "message"} {
 		t.Run(read, func(t *testing.T) {
-			store := dbtest.OpenTestDB(t)
-			now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-			_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{
-				Session: db.Session{ID: "session", Agent: "codex", MessageCount: 1, TerminationStatus: dbtest.Ptr("awaiting_user")}, ReplaceMessages: true,
-				Messages: []db.Message{{SessionID: "session", Role: "assistant", Content: "done", Timestamp: now.Format(time.RFC3339Nano)}},
-			}})
-			require.NoError(t, err)
-			var sent []Notification
-			hub := New(store, func() config.NotificationsConfig { return config.NotificationsConfig{Enabled: true} }, func(n Notification) { sent = append(sent, n) })
-			hub.now = func() time.Time { return now }
-			hub.since = now.Add(-time.Second)
-			reader := &failingReadStore{DB: store, failSession: read == "session", failMessage: read == "message"}
-			hub.store = reader
-			var logs bytes.Buffer
-			oldOutput := log.Writer()
-			log.SetOutput(&logs)
-			t.Cleanup(func() { log.SetOutput(oldOutput) })
-			hub.Enqueue([]string{"session"})
-			<-hub.wake
-			hub.process(t.Context())
-			assert.Empty(t, sent)
-			assert.Empty(t, hub.wake, "failed reads wait for another write")
-			hub.Enqueue([]string{"session"})
-			<-hub.wake
-			hub.process(t.Context())
-			assert.Equal(t, 1, strings.Count(logs.String(), "notification read:"))
-			reader.failSession, reader.failMessage = false, false
-			hub.Enqueue([]string{"other"})
-			<-hub.wake
-			hub.process(t.Context())
-			require.Len(t, sent, 1)
-			assert.Equal(t, "session", sent[0].SessionID)
-			assert.Equal(t, "turn_end", sent[0].Kind)
-			hub.Enqueue([]string{"other"})
-			<-hub.wake
-			hub.process(t.Context())
-			assert.Len(t, sent, 1)
+			synctest.Test(t, func(t *testing.T) {
+				store := dbtest.OpenTestDB(t)
+				now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+				_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{
+					Session: db.Session{ID: "session", Agent: "codex", MessageCount: 1, TerminationStatus: dbtest.Ptr("awaiting_user")}, ReplaceMessages: true,
+					Messages: []db.Message{{SessionID: "session", Role: "assistant", Content: "done", Timestamp: now.Format(time.RFC3339Nano)}},
+				}})
+				require.NoError(t, err)
+				var sent []Notification
+				hub := New(store, func() config.NotificationsConfig { return config.NotificationsConfig{Enabled: true} }, func(n Notification) { sent = append(sent, n) })
+				hub.now = func() time.Time { return now }
+				hub.since = now.Add(-time.Second)
+				reader := &failingReadStore{DB: store, failSession: read == "session", failMessage: read == "message"}
+				hub.store = reader
+				var logs bytes.Buffer
+				oldOutput := log.Writer()
+				log.SetOutput(&logs)
+				t.Cleanup(func() { log.SetOutput(oldOutput) })
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				go hub.Run(ctx)
+				hub.Enqueue([]string{"session"})
+				synctest.Wait()
+				assert.Empty(t, sent)
+				time.Sleep(3 * time.Second)
+				synctest.Wait()
+				assert.Empty(t, sent)
+				assert.Equal(t, 1, strings.Count(logs.String(), "notification read:"))
+				reader.failSession, reader.failMessage = false, false
+				time.Sleep(3 * time.Second)
+				synctest.Wait()
+				require.Len(t, sent, 1)
+				assert.Equal(t, "session", sent[0].SessionID)
+				assert.Equal(t, "turn_end", sent[0].Kind)
+				time.Sleep(9 * time.Second)
+				synctest.Wait()
+				assert.Len(t, sent, 1)
+			})
 		})
 	}
 }
