@@ -18409,8 +18409,12 @@ func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 	}{
 		{"separate duration", []string{answer, duration}, []string{"awaiting_user", "awaiting_user"}},
 		{"same tail duration", []string{answer + duration}, []string{"awaiting_user"}},
-		{"incomplete final line", []string{answer + `{"type":"user"`}, []string{"truncated"}},
-		{"user follows answer", []string{answer, testjsonl.ClaudeUserJSON("follow up", tsEarlyS5) + "\n"}, []string{"awaiting_user", "clean"}},
+		{"incomplete final line", []string{answer + `{"type":"user"`}, []string{"awaiting_user"}},
+		{"two tools one result", []string{
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"first","name":"Read","input":{}},{"type":"tool_use","id":"second","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n",
+			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","content":"ok"}]}}` + "\n",
+		}, []string{"tool_call_pending", "tool_call_pending"}},
+		{"user follows answer", []string{answer, testjsonl.ClaudeUserJSON("follow up", tsEarlyS5) + "\n"}, []string{"awaiting_user", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)
@@ -18426,8 +18430,12 @@ func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 				session, err := env.db.GetSessionFull(t.Context(), "notify")
 				require.NoError(t, err)
 				require.NotNil(t, session)
-				require.NotNil(t, session.TerminationStatus)
-				assert.Equal(t, tc.want[i], *session.TerminationStatus)
+				if tc.want[i] == "" {
+					assert.Nil(t, session.TerminationStatus)
+				} else {
+					require.NotNil(t, session.TerminationStatus)
+					assert.Equal(t, tc.want[i], *session.TerminationStatus)
+				}
 				assert.True(t, session.LastWriteIncremental)
 			}
 		})

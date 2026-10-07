@@ -7,6 +7,15 @@ description: Release history for AgentsView
 The latest release is
 [0.45.0](https://github.com/kenn-io/agentsview/releases/tag/v0.45.0).
 
+## Unreleased
+
+**New features**
+
+- Get a native desktop toast when an agent finishes a turn and waits for you,
+  including Claude Code. Enable notifications in Settings and optionally toast
+  each new assistant text reply. History, rewrites, subagents, and automated
+  sessions stay silent. Toasts arrive while the desktop app is connected.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

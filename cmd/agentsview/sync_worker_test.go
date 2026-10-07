@@ -94,6 +94,7 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 	assert.Equal(t, "ok", results[0].Status)
 	assert.True(t, results[0].DiscoveryComplete)
 	assert.Equal(t, 3, results[0].Synced)
+	assert.ElementsMatch(t, []string{"session0", "session1", "session2"}, results[0].WrittenSessions)
 	require.NotNil(t, results[0].Stats,
 		"the terminal result must carry the full SyncStats payload")
 	assert.Equal(t, 3, results[0].Stats.TotalSessions,

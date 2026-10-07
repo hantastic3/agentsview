@@ -20,11 +20,6 @@ type Notification struct {
 	Excerpt     string `json:"excerpt"`
 }
 
-type sessionState struct {
-	turnEnd, replyEnd  *messageIdentity
-	lastReply, endedAt time.Time
-}
-
 type messageIdentity struct {
 	ordinal   int
 	timestamp string
@@ -44,15 +39,14 @@ type Hub struct {
 	mu      sync.Mutex
 	pending map[string]bool
 	wake    chan struct{}
-	seen    map[string]sessionState
-	retries map[string]time.Time
+	seen    map[string]messageIdentity
 }
 
 func New(store sessionStore, cfg func() config.NotificationsConfig, publish func(Notification)) *Hub {
 	return &Hub{
 		store: store, cfg: cfg, publish: publish, now: time.Now,
 		since: time.Now(), pending: make(map[string]bool), wake: make(chan struct{}, 1),
-		seen: make(map[string]sessionState), retries: make(map[string]time.Time),
+		seen: make(map[string]messageIdentity),
 	}
 }
 
@@ -70,124 +64,73 @@ func (h *Hub) Enqueue(ids []string) {
 }
 
 func (h *Hub) Run(ctx context.Context) {
-	var timer *time.Timer
-	var timerC <-chan time.Time
-	defer func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-h.wake:
-		case <-timerC:
-		}
-		if timer != nil {
-			timer.Stop()
-		}
-		timerC = nil
-		if next := h.process(ctx); !next.IsZero() {
-			timer = time.NewTimer(next.Sub(h.now()))
-			timerC = timer.C
+			h.process(ctx)
 		}
 	}
 }
 
-func (h *Hub) process(ctx context.Context) time.Time {
+func (h *Hub) process(ctx context.Context) {
 	now := h.now()
 	cfg := h.cfg()
 	h.mu.Lock()
 	ids := h.pending
 	h.pending = make(map[string]bool)
 	h.mu.Unlock()
-	for id, state := range h.seen {
-		if now.Sub(state.endedAt) > 10*time.Minute {
+	for id, identity := range h.seen {
+		timestamp, err := time.Parse(time.RFC3339Nano, identity.timestamp)
+		if err != nil || now.Sub(timestamp) > 10*time.Minute {
 			delete(h.seen, id)
-			delete(h.retries, id)
 		}
 	}
 	if !cfg.Enabled {
 		h.since = now
-		clear(h.retries)
-		return time.Time{}
-	}
-	for id, due := range h.retries {
-		if !due.After(now) {
-			ids[id] = true
-		}
+		return
 	}
 	for id := range ids {
-		delete(h.retries, id)
 		session, err := h.store.GetSession(ctx, id)
 		if err != nil {
-			h.retries[id] = now.Add(time.Second)
 			if ctx.Err() == nil {
 				log.Printf("notification session read: %v", err)
 			}
 			continue
 		}
-		if session == nil || session.RelationshipType == "subagent" || session.IsAutomated || session.EndedAt == nil {
-			continue
-		}
-		endedAt, err := time.Parse(time.RFC3339Nano, *session.EndedAt)
-		if err != nil || !endedAt.After(h.since) || now.Sub(endedAt) > 10*time.Minute {
-			continue
-		}
-		state := h.seen[id]
-		state.endedAt = endedAt
-		awaitingUser := session.TerminationStatus != nil && *session.TerminationStatus == "awaiting_user"
-		if !awaitingUser && !cfg.NotifyNewReply {
-			h.seen[id] = state
+		if session == nil || session.RelationshipType == "subagent" || session.IsAutomated {
 			continue
 		}
 		latest, err := h.store.GetLatestNonSystemMessage(ctx, id)
 		if err != nil {
-			h.retries[id] = now.Add(time.Second)
 			if ctx.Err() == nil {
 				log.Printf("notification message read: %v", err)
 			}
 			continue
 		}
-		identity := messageIdentity{ordinal: -1}
-		if latest != nil {
-			identity = messageIdentity{ordinal: latest.Ordinal, timestamp: latest.Timestamp}
-		}
-		alreadyEnded := state.turnEnd != nil && *state.turnEnd == identity
-		turnEnd := awaitingUser && !alreadyEnded
-		if !turnEnd && (!cfg.NotifyNewReply || alreadyEnded || state.replyEnd != nil && *state.replyEnd == identity) {
-			h.seen[id] = state
+		if latest == nil || latest.Role != "assistant" || latest.HasToolUse || latest.Content == "" {
 			continue
 		}
-		n := Notification{Kind: "turn_end", SessionID: id, Project: session.Project, Agent: session.Agent}
+		timestamp, err := time.Parse(time.RFC3339Nano, latest.Timestamp)
+		if err != nil || !timestamp.After(h.since) || now.Sub(timestamp) > 10*time.Minute {
+			continue
+		}
+		identity := messageIdentity{ordinal: latest.Ordinal, timestamp: latest.Timestamp}
+		if seen, ok := h.seen[id]; ok && seen == identity {
+			continue
+		}
+		n := Notification{Kind: "turn_end", SessionID: id, Project: session.Project, Agent: session.Agent, Excerpt: stringutil.TruncateRunes(latest.Content, 160, "…")}
+		if session.TerminationStatus == nil || *session.TerminationStatus != "awaiting_user" {
+			if !cfg.NotifyNewReply {
+				continue
+			}
+			n.Kind = "new_reply"
+		}
 		if session.DisplayName != nil {
 			n.DisplayName = *session.DisplayName
 		}
-		if latest != nil && latest.Role == "assistant" {
-			n.Excerpt = stringutil.TruncateRunes(latest.Content, 160, "…")
-		}
-		if turnEnd {
-			state.turnEnd = &identity
-		} else if latest == nil || latest.Role != "assistant" {
-			h.seen[id] = state
-			continue
-		} else if due := state.lastReply.Add(time.Minute); due.After(now) {
-			h.retries[id] = due
-			h.seen[id] = state
-			continue
-		} else {
-			n.Kind = "new_reply"
-			state.replyEnd, state.lastReply = &identity, now
-		}
-		h.seen[id] = state
+		h.seen[id] = identity
 		h.publish(n)
 	}
-	var next time.Time
-	for _, due := range h.retries {
-		if next.IsZero() || due.Before(next) {
-			next = due
-		}
-	}
-	return next
 }

@@ -5,9 +5,7 @@ import (
 	"time"
 )
 
-// broadcasterBufferCap is the per-subscriber buffer size. A slow
-// client can fall this many events behind before the broadcaster
-// starts dropping events on its channel.
+// A dropped notification frame loses a toast; refresh frames already coalesce.
 const broadcasterBufferCap = 256
 
 // Event carries a named payload or an advisory refresh scope.

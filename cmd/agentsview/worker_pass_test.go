@@ -221,14 +221,14 @@ func TestRunWorkerWritePassReloadsSkipCacheBeforeReleasingLock(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRunWorkerWritePassCatchesUpSessionObserver(t *testing.T) {
+func TestRunWorkerWritePassDeliversWrittenSessions(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode string
 		workerErr  error
 	}{
 		{name: "audit", mode: "audit"},
 		{name: "foreground sync", mode: "sync"},
-		{name: "failed worker with committed writes", mode: "audit", workerErr: errors.New("worker result lost")},
+		{name: "failed worker with committed writes", mode: "audit", workerErr: errors.New("worker failed after writes")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
@@ -240,7 +240,7 @@ func TestRunWorkerWritePassCatchesUpSessionObserver(t *testing.T) {
 				assert.NoError(t, writeOneSession(t.Context(), database), "writer restored before catch-up")
 				observed = append(observed, ids...)
 			})
-			var want []string
+			want := []string{"recent", "old", "started-only"}
 			restore := stubLaunchSyncWorker(t, func(
 				_ context.Context, workerCfg config.Config, request syncWorkerRequest, _ func(workerLine),
 			) (workerResult, error) {
@@ -248,26 +248,11 @@ func TestRunWorkerWritePassCatchesUpSessionObserver(t *testing.T) {
 				workerDB, err := db.Open(t.Context(), workerCfg.DBPath)
 				require.NoError(t, err)
 				defer workerDB.Close()
-				now := time.Now().UTC()
-				for i := range 257 {
-					id := fmt.Sprintf("recent-%03d", i)
-					want = append(want, id)
-					require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{
-						ID: id, Project: "demo", Agent: "claude", MessageCount: 1,
-						EndedAt:           dbtest.Ptr(now.Add(-time.Minute).Format(time.RFC3339Nano)),
-						TerminationStatus: dbtest.Ptr("awaiting_user"),
-					}))
+				for _, id := range want {
+					require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{ID: id, Project: "demo", Agent: "claude"}))
 				}
-				require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{
-					ID: "old", Project: "demo", Agent: "claude", MessageCount: 1,
-					EndedAt: dbtest.Ptr(now.Add(-time.Hour).Format(time.RFC3339Nano)),
-				}))
-				require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{
-					ID: "started-only", Project: "demo", Agent: "claude", MessageCount: 1,
-					StartedAt: dbtest.Ptr(now.Format(time.RFC3339Nano)),
-				}))
 				assert.Empty(t, observed, "worker writes bypass the daemon's observer")
-				return workerResult{Status: "ok", DiscoveryComplete: true}, tc.workerErr
+				return workerResult{Status: "ok", DiscoveryComplete: true, WrittenSessions: want}, tc.workerErr
 			})
 			defer restore()
 			_, err := runWorkerWritePass(t.Context(), t.Context(), cfg, engine, database, lock, tc.mode, nil)
@@ -276,7 +261,7 @@ func TestRunWorkerWritePassCatchesUpSessionObserver(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			assert.ElementsMatch(t, want, observed, "all pages of recent ended sessions reach the observer")
+			assert.ElementsMatch(t, want, observed, "only worker-written IDs reach the observer")
 		})
 	}
 }

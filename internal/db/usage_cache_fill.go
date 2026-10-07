@@ -1356,37 +1356,13 @@ func (db *DB) SetSessionWriteObserver(observer func([]string)) {
 	db.sessionWriteObserver = observer
 }
 
-// NotifySessionWritesSince catches up the observer after another process writes the archive.
-func (db *DB) NotifySessionWritesSince(ctx context.Context, since time.Time) error {
+// NotifySessionWrites delivers worker-written IDs after archive access is restored.
+func (db *DB) NotifySessionWrites(ids []string) {
 	db.mu.Lock()
 	observer := db.sessionWriteObserver
 	db.mu.Unlock()
-	if observer == nil {
-		return nil
-	}
-	filter := SessionFilter{ActiveSince: since.Format(time.RFC3339Nano), IncludeChildren: true, IncludeEmpty: true, AutomatedScope: "all", Limit: 256}
-	for {
-		page, err := db.ListSessions(ctx, filter)
-		if err != nil {
-			return err
-		}
-		ids := make([]string, 0, len(page.Sessions))
-		for _, session := range page.Sessions {
-			if session.EndedAt == nil {
-				continue
-			}
-			endedAt, err := time.Parse(time.RFC3339Nano, *session.EndedAt)
-			if err == nil && !endedAt.Before(since) {
-				ids = append(ids, session.ID)
-			}
-		}
-		if len(ids) > 0 {
-			observer(ids)
-		}
-		if page.NextCursor == "" {
-			return nil
-		}
-		filter.Cursor = page.NextCursor
+	if observer != nil && len(ids) > 0 {
+		observer(ids)
 	}
 }
 

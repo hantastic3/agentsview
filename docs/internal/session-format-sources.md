@@ -177,11 +177,14 @@ fixtures retain this field; missing identities remain source-local.
   records are a measured subset, not an authoritative or exhaustive schema.
 
 - **Incremental turn status (2026-10-07):** Rechecked `message.stop_reason`
-  against the stored Claude fixtures and full parser. Every non-empty message
-  tail uses the same classifier; `end_turn` means `awaiting_user` when the
-  assistant is last. User-only tails classify as `clean`. Metadata-only tails
-  preserve the stored status. An invalid final JSON line takes precedence
-  and classifies as `truncated`, including when it ends with a newline.
+  against the stored Claude fixtures, full parser, and incremental tail tests.
+  A tail containing a non-system assistant message uses `Classify` and its
+  last assistant `stop_reason`; `end_turn` means `awaiting_user` when the
+  assistant is last. User-only and tool-result-only tails return no verdict,
+  clearing stored status when the message count changes. Empty tool-result
+  carriers are filtered before storage and keep the count and status unchanged.
+  Metadata-only tails keep the stored status. Partial trailing lines wait for
+  the next append without overriding the verdict from complete messages.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.

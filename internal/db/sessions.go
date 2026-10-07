@@ -3057,8 +3057,8 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 // at insert; the incremental path never re-evaluates it).
 //
 // A non-nil termination_status is an authoritative incremental verdict and
-// is stored as-is. Nil preserves the status for metadata-only appends and
-// clears it when the message count changes without a new verdict.
+// is stored as-is. Nil keeps the status when message_count is unchanged and
+// clears it when the count changes.
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {

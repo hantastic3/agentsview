@@ -1042,9 +1042,10 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 		want       *TerminationStatus
 	}{
 		{name: "assistant end turn", tail: `{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n", want: new(TerminationAwaitingUser)},
-		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: new(TerminationClean)},
-		{name: "incomplete tail", tail: `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"user"`, want: new(TerminationTruncated)},
-		{name: "malformed complete line", tail: `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"user"` + "\n", want: new(TerminationTruncated)},
+		{name: "tool result only", tail: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","content":"ok"}]}}` + "\n"},
+		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: nil},
+		{name: "incomplete tail", tail: `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"user"`, want: new(TerminationAwaitingUser)},
+		{name: "malformed complete line", tail: `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"user"` + "\n", want: new(TerminationAwaitingUser)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -1063,12 +1064,6 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, IncrementalApplied, status)
 			assert.Equal(t, tc.want, outcome.TerminationStatus)
-			if tc.want != nil {
-				full, err := parseClaudeSession(path, "project", "local")
-				require.NoError(t, err)
-				require.NotEmpty(t, full)
-				assert.Equal(t, *tc.want, full[0].Session.TerminationStatus)
-			}
 		})
 	}
 }

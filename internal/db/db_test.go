@@ -8469,6 +8469,7 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 		terminationStatus *string
 		wantStatus        string
 		wantNull          bool
+		msgCount          int
 	}{
 		{
 			name:              "stores authoritative status",
@@ -8477,8 +8478,10 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 		},
 		{
 			name:     "nil clears status",
+			msgCount: 1,
 			wantNull: true,
 		},
+		{name: "nil with unchanged count keeps status", wantStatus: "tool_call_pending"},
 	}
 
 	for _, tt := range tests {
@@ -8492,6 +8495,7 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 
 			update := IncrementalSessionUpdate{
 				TerminationStatus: tt.terminationStatus,
+				MsgCount:          tt.msgCount,
 			}
 			require.NoError(t, d.UpdateSessionIncremental(t.Context(),
 				"incremental-status", update,

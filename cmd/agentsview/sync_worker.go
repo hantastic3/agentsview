@@ -56,7 +56,8 @@ type workerResult struct {
 	Stats *sync.SyncStats `json:"stats,omitempty"`
 	// LinkStateKnown marks an engine snapshot of Stats.LinksPending, even when
 	// unrelated source failures make the pass fail. Early failures lack it.
-	LinkStateKnown bool `json:"linkStateKnown,omitempty"`
+	LinkStateKnown  bool     `json:"linkStateKnown,omitempty"`
+	WrittenSessions []string `json:"writtenSessions,omitempty"`
 }
 
 // syncWorkerRequest carries the pass and any unfinished linking owned by the
@@ -188,6 +189,16 @@ func runSyncWorkerStartup(
 		return err
 	}
 	defer closeWriteDB(database, writeLock)
+	var writtenSessions []string
+	written := make(map[string]bool)
+	database.SetSessionWriteObserver(func(ids []string) {
+		for _, id := range ids {
+			if !written[id] {
+				written[id] = true
+				writtenSessions = append(writtenSessions, id)
+			}
+		}
+	})
 	onProgress(sync.Progress{
 		Phase: sync.PhaseDiscovering, Detail: "Preparing session sync",
 		Resync: mode == "startup" && database.NeedsResync(),
@@ -254,6 +265,7 @@ func runSyncWorkerStartup(
 
 	result.Stats.LinksPending = engine.PendingSubagentLinks()
 	result.LinkStateKnown = true
+	result.WrittenSessions = writtenSessions
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
 		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
