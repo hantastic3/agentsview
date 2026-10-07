@@ -25,13 +25,17 @@ type messageIdentity struct {
 	timestamp string
 }
 
-type sessionStore interface {
-	GetSession(context.Context, string) (*db.Session, error)
-	GetLatestNonSystemMessage(context.Context, string) (*db.Message, error)
+const FreshnessWindow = 10 * time.Minute
+
+type notifiedMessage struct {
+	messageIdentity
+	at       time.Time
+	turnEnd  bool
+	newReply bool
 }
 
 type Hub struct {
-	store   sessionStore
+	store   *db.DB
 	cfg     func() config.NotificationsConfig
 	publish func(Notification)
 	now     func() time.Time
@@ -39,14 +43,14 @@ type Hub struct {
 	mu      sync.Mutex
 	pending map[string]bool
 	wake    chan struct{}
-	seen    map[string]messageIdentity
+	seen    map[string]notifiedMessage
 }
 
-func New(store sessionStore, cfg func() config.NotificationsConfig, publish func(Notification)) *Hub {
+func New(store *db.DB, cfg func() config.NotificationsConfig, publish func(Notification)) *Hub {
 	return &Hub{
 		store: store, cfg: cfg, publish: publish, now: time.Now,
 		since: time.Now(), pending: make(map[string]bool), wake: make(chan struct{}, 1),
-		seen: make(map[string]messageIdentity),
+		seen: make(map[string]notifiedMessage),
 	}
 }
 
@@ -82,8 +86,7 @@ func (h *Hub) process(ctx context.Context) {
 	h.pending = make(map[string]bool)
 	h.mu.Unlock()
 	for id, identity := range h.seen {
-		timestamp, err := time.Parse(time.RFC3339Nano, identity.timestamp)
-		if err != nil || now.Sub(timestamp) > 10*time.Minute {
+		if now.Sub(identity.at) > FreshnessWindow {
 			delete(h.seen, id)
 		}
 	}
@@ -109,28 +112,38 @@ func (h *Hub) process(ctx context.Context) {
 			}
 			continue
 		}
-		if latest == nil || latest.Role != "assistant" || latest.HasToolUse || latest.Content == "" {
+		if latest == nil || latest.Role != "assistant" || latest.HasToolUse {
 			continue
 		}
 		timestamp, err := time.Parse(time.RFC3339Nano, latest.Timestamp)
-		if err != nil || !timestamp.After(h.since) || now.Sub(timestamp) > 10*time.Minute {
+		if err != nil && session.EndedAt != nil {
+			timestamp, err = time.Parse(time.RFC3339Nano, *session.EndedAt)
+		}
+		if err != nil || !timestamp.After(h.since) || now.Sub(timestamp) > FreshnessWindow {
 			continue
 		}
 		identity := messageIdentity{ordinal: latest.Ordinal, timestamp: latest.Timestamp}
-		if seen, ok := h.seen[id]; ok && seen == identity {
-			continue
+		seen, ok := h.seen[id]
+		if !ok || seen.messageIdentity != identity {
+			seen = notifiedMessage{messageIdentity: identity, at: timestamp}
 		}
 		n := Notification{Kind: "turn_end", SessionID: id, Project: session.Project, Agent: session.Agent, Excerpt: stringutil.TruncateRunes(latest.Content, 160, "…")}
 		if session.TerminationStatus == nil || *session.TerminationStatus != "awaiting_user" {
-			if !cfg.NotifyNewReply {
+			if !cfg.NotifyNewReply || latest.Content == "" || seen.newReply {
 				continue
 			}
 			n.Kind = "new_reply"
+			seen.newReply = true
+		} else {
+			if seen.turnEnd {
+				continue
+			}
+			seen.turnEnd = true
 		}
 		if session.DisplayName != nil {
 			n.DisplayName = *session.DisplayName
 		}
-		h.seen[id] = identity
+		h.seen[id] = seen
 		h.publish(n)
 	}
 }

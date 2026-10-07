@@ -11,11 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -94,11 +96,68 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 	assert.Equal(t, "ok", results[0].Status)
 	assert.True(t, results[0].DiscoveryComplete)
 	assert.Equal(t, 3, results[0].Synced)
-	assert.ElementsMatch(t, []string{"session0", "session1", "session2"}, results[0].WrittenSessions)
+	assert.Empty(t, results[0].WrittenSessions, "disabled notifications collect no sessions")
 	require.NotNil(t, results[0].Stats,
 		"the terminal result must carry the full SyncStats payload")
 	assert.Equal(t, 3, results[0].Stats.TotalSessions,
 		"public SyncStats fields must survive the NDJSON protocol")
+}
+
+func TestSyncWorkerNotificationSessions(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			cfg.Notifications.Enabled = enabled
+			fresh := time.Now().UTC().Format(time.RFC3339Nano)
+			path := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "session0.jsonl")
+			content := testjsonl.NewSessionBuilder().AddClaudeUser(fresh, "hello").AddClaudeAssistant(fresh, "hi").String()
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			var out bytes.Buffer
+			require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out))
+			result, err := readWorkerResult(&out, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 3, result.Synced)
+			if enabled {
+				assert.Equal(t, []string{"session0"}, result.WrittenSessions)
+			} else {
+				assert.Empty(t, result.WrittenSessions)
+			}
+		})
+	}
+}
+
+func TestWorkerLargeWrittenSetFitsFrame(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	ids := make([]string, 27000)
+	writes := make([]db.SessionBatchWrite, len(ids))
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%08d-0000-0000-0000-000000000000", i)
+		ended := "2026-01-01T11:49:00Z"
+		if i == 0 {
+			ended = "2026-01-01T12:00:00Z"
+		} else if i == 1 {
+			ended = "2026-01-01T11:50:00Z"
+		}
+		writes[i].Session = db.Session{ID: ids[i], Agent: "claude", Project: "demo", EndedAt: &ended}
+	}
+	writes[len(writes)-1].Session.EndedAt = nil
+	writes[len(writes)-2].Session.EndedAt = dbtest.Ptr("invalid")
+	_, err := database.WriteSessionBatch(writes)
+	require.NoError(t, err)
+	result := workerResult{Status: "ok", DiscoveryComplete: true, Synced: len(ids), WrittenSessions: ids}
+	unfiltered, err := json.Marshal(workerLine{Result: &result})
+	require.NoError(t, err)
+	require.Greater(t, len(unfiltered), workerLineMaxBytes, "the historical import reproduces the oversized frame")
+	result.WrittenSessions = recentWrittenSessions(t.Context(), database, ids, now)
+	wire, err := json.Marshal(workerLine{Result: &result})
+	require.NoError(t, err)
+	assert.Less(t, len(wire)+1, workerLineMaxBytes)
+	decoded, err := readWorkerResult(bytes.NewReader(append(wire, '\n')), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", decoded.Status)
+	assert.Equal(t, 27000, decoded.Synced)
+	assert.Equal(t, []string{"00000000-0000-0000-0000-000000000000", "00000001-0000-0000-0000-000000000000"}, decoded.WrittenSessions)
 }
 
 func TestSyncWorkerAuditModeForwardsReconciliationProgress(t *testing.T) {

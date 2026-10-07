@@ -2455,7 +2455,7 @@
   "settings_notifications_enable": "デスクトップ通知を有効にする",
   "settings_notifications_turn_end_hint": "デスクトップアプリのみ。エージェントがターンを終了し、あなたの応答を待つと通知します。",
   "settings_notifications_new_reply": "新しい返信も通知する",
-  "settings_notifications_new_reply_hint": "セッションごとに1分間に最大1回通知します。保留中の通知には最新の返信が表示されます。",
+  "settings_notifications_new_reply_hint": "アシスタントの新しいテキスト返信ごとに1回通知します。",
   "notification_turn_end_body": "エージェントはこのターンを終え、あなたの入力を待っています。",
   "notification_new_reply_title_suffix": "{name}: 新しい返信",
   "notification_turn_end_title_suffix": "{name}: 返信が完了しました"

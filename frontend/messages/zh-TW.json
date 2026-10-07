@@ -2384,7 +2384,7 @@
   "settings_notifications_enable": "啟用桌面通知",
   "settings_notifications_turn_end_hint": "僅限桌面應用程式。代理結束回合並等待你回覆時傳送通知。",
   "settings_notifications_new_reply": "也通知新回覆",
-  "settings_notifications_new_reply_hint": "每個工作階段每分鐘最多一則通知。待傳送的通知顯示最新回覆。",
+  "settings_notifications_new_reply_hint": "助理每次傳送新的文字回覆時通知一次。",
   "notification_turn_end_body": "Agent 已完成本輪回覆，正在等待你的輸入。",
   "notification_new_reply_title_suffix": "{name}: 新回覆",
   "notification_turn_end_title_suffix": "{name}: 回覆已完成"

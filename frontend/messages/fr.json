@@ -2466,7 +2466,7 @@
   "settings_notifications_enable": "Activer les notifications de bureau",
   "settings_notifications_turn_end_hint": "Uniquement dans l’application de bureau. Vous êtes averti quand un agent termine son tour et attend votre réponse.",
   "settings_notifications_new_reply": "Notifier aussi les nouvelles réponses",
-  "settings_notifications_new_reply_hint": "Au plus une notification par session et par minute. Une notification en attente affiche la dernière réponse.",
+  "settings_notifications_new_reply_hint": "Chaque nouvelle réponse textuelle de l'assistant envoie une notification.",
   "notification_turn_end_body": "L'agent a terminé ce tour et vous attend.",
   "notification_new_reply_title_suffix": "{name}: nouvelle réponse",
   "notification_turn_end_title_suffix": "{name}: réponse terminée"

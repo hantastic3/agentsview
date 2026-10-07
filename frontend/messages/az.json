@@ -2469,7 +2469,7 @@
   "settings_notifications_enable": "Masaüstü bildirişlərini aktivləşdir",
   "settings_notifications_turn_end_hint": "Yalnız masaüstü tətbiqində. Agent növbəsini bitirib sizi gözləyəndə bildiriş alırsınız.",
   "settings_notifications_new_reply": "Yeni cavablar üçün də bildiriş göndər",
-  "settings_notifications_new_reply_hint": "Hər sessiya üçün dəqiqədə ən çox bir bildiriş. Gözləyən bildiriş ən son cavabı göstərir.",
+  "settings_notifications_new_reply_hint": "Assistentin hər yeni mətn cavabı üçün bir bildiriş göndərilir.",
   "notification_turn_end_body": "Agent bu növbəni bitirib sizi gözləyir.",
   "notification_new_reply_title_suffix": "{name}: yeni cavab",
   "notification_turn_end_title_suffix": "{name}: cavab tamamlandı"

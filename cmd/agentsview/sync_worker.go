@@ -6,12 +6,15 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/notify"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -190,15 +193,17 @@ func runSyncWorkerStartup(
 	}
 	defer closeWriteDB(database, writeLock)
 	var writtenSessions []string
-	written := make(map[string]bool)
-	database.SetSessionWriteObserver(func(ids []string) {
-		for _, id := range ids {
-			if !written[id] {
-				written[id] = true
-				writtenSessions = append(writtenSessions, id)
+	if cfg.Notifications.Enabled {
+		written := make(map[string]bool)
+		database.SetSessionWriteObserver(func(ids []string) {
+			for _, id := range ids {
+				if !written[id] {
+					written[id] = true
+					writtenSessions = append(writtenSessions, id)
+				}
 			}
-		}
-	})
+		})
+	}
 	onProgress(sync.Progress{
 		Phase: sync.PhaseDiscovering, Detail: "Preparing session sync",
 		Resync: mode == "startup" && database.NeedsResync(),
@@ -265,12 +270,31 @@ func runSyncWorkerStartup(
 
 	result.Stats.LinksPending = engine.PendingSubagentLinks()
 	result.LinkStateKnown = true
-	result.WrittenSessions = writtenSessions
+	result.WrittenSessions = recentWrittenSessions(ctx, database, writtenSessions, time.Now())
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
 		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
 	}
 	return nil
+}
+
+func recentWrittenSessions(ctx context.Context, database *db.DB, ids []string, now time.Time) []string {
+	recent := ids[:0]
+	for _, id := range ids {
+		session, err := database.GetSession(ctx, id)
+		if err != nil {
+			log.Printf("notification session read: %v", err)
+			continue
+		}
+		if session == nil || session.EndedAt == nil {
+			continue
+		}
+		endedAt, err := time.Parse(time.RFC3339Nano, *session.EndedAt)
+		if err == nil && now.Sub(endedAt) <= notify.FreshnessWindow {
+			recent = append(recent, id)
+		}
+	}
+	return recent
 }
 
 // runSyncWorkerResyncBuild builds a replacement archive at the resync temp path

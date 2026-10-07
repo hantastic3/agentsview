@@ -2467,7 +2467,7 @@
   "settings_notifications_enable": "Enable desktop notifications",
   "settings_notifications_turn_end_hint": "Desktop app only. You are notified when an agent finishes its turn and waits for you.",
   "settings_notifications_new_reply": "Also notify on new replies",
-  "settings_notifications_new_reply_hint": "At most one notification per session per minute. A pending notification shows the latest reply.",
+  "settings_notifications_new_reply_hint": "Each new assistant text reply sends one notification.",
   "notification_turn_end_body": "The agent finished this turn and is waiting for you.",
   "notification_new_reply_title_suffix": "{name}: new reply",
   "notification_turn_end_title_suffix": "{name}: reply finished"

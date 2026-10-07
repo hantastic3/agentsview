@@ -181,10 +181,13 @@ func TestHubReplyBehindSystemRows(t *testing.T) {
 func TestHubAssistantRows(t *testing.T) {
 	for _, tc := range []struct {
 		name, role, content string
+		termination         string
 		toolUse             bool
+		want                int
 	}{
 		{name: "tool call", role: "assistant", content: "running", toolUse: true},
-		{name: "empty reply", role: "assistant"},
+		{name: "empty reply", role: "assistant", termination: "tool_call_pending"},
+		{name: "empty turn end", role: "assistant", want: 1},
 		{name: "prompt after answer", role: "user", content: "follow up"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -196,15 +199,23 @@ func TestHubAssistantRows(t *testing.T) {
 			}, func(n Notification) { sent = append(sent, n) })
 			hub.now = func() time.Time { return now }
 			hub.since = now.Add(-time.Second)
+			termination := "awaiting_user"
+			if tc.termination != "" {
+				termination = tc.termination
+			}
 			_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{
-				Session:         db.Session{ID: "session", Agent: "claude", Project: "demo", MessageCount: 1, TerminationStatus: dbtest.Ptr("awaiting_user")},
+				Session:         db.Session{ID: "session", Agent: "claude", Project: "demo", MessageCount: 1, TerminationStatus: &termination},
 				ReplaceMessages: true,
 				Messages:        []db.Message{{SessionID: "session", Ordinal: 0, Role: tc.role, Content: tc.content, HasToolUse: tc.toolUse, Timestamp: now.Format(time.RFC3339Nano)}},
 			}})
 			require.NoError(t, err)
 			hub.Enqueue([]string{"session"})
 			hub.process(t.Context())
-			assert.Empty(t, sent)
+			require.Len(t, sent, tc.want)
+			if tc.want > 0 {
+				assert.Equal(t, "turn_end", sent[0].Kind)
+				assert.Empty(t, sent[0].Excerpt)
+			}
 		})
 	}
 }
@@ -228,8 +239,92 @@ func TestHubCodexReplyThenTaskComplete(t *testing.T) {
 	require.Len(t, sent, 1)
 	assert.Equal(t, "new_reply", sent[0].Kind)
 	assert.Equal(t, strings.Repeat("界", 160)+"…", sent[0].Excerpt)
+	hub.Enqueue([]string{"session"})
+	hub.process(t.Context())
+	assert.Len(t, sent, 1, "same reply fires once")
 	require.NoError(t, store.UpdateSessionIncremental(t.Context(), "session", db.IncrementalSessionUpdate{MsgCount: 1, TerminationStatus: dbtest.Ptr("awaiting_user")}))
 	hub.Enqueue([]string{"session"})
 	hub.process(t.Context())
+	require.Len(t, sent, 2)
+	assert.Equal(t, "turn_end", sent[1].Kind)
+	hub.Enqueue([]string{"session"})
+	hub.process(t.Context())
+	assert.Len(t, sent, 2, "same completion fires once")
+	require.NoError(t, store.UpdateSessionIncremental(t.Context(), "session", db.IncrementalSessionUpdate{MsgCount: 1, TerminationStatus: dbtest.Ptr("tool_call_pending")}))
+	hub.Enqueue([]string{"session"})
+	hub.process(t.Context())
+	assert.Len(t, sent, 2, "a status rewrite cannot repeat the reply")
+}
+
+func TestHubUsageOnlyTurnEnd(t *testing.T) {
+	store := dbtest.OpenTestDB(t)
+	store.SetArchiveContent(config.ArchiveContentUsage)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	var sent []Notification
+	hub := New(store, func() config.NotificationsConfig {
+		return config.NotificationsConfig{Enabled: true, NotifyNewReply: true}
+	}, func(n Notification) { sent = append(sent, n) })
+	hub.now = func() time.Time { return now }
+	hub.since = now.Add(-time.Second)
+	_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{
+		Session: db.Session{ID: "session", Agent: "codex", Project: "demo", MessageCount: 1}, ReplaceMessages: true,
+		Messages: []db.Message{{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "done", Timestamp: now.Format(time.RFC3339Nano)}},
+	}})
+	require.NoError(t, err)
+	hub.Enqueue([]string{"session"})
+	hub.process(t.Context())
+	assert.Empty(t, sent, "usage-only replies have no text to toast")
+	require.NoError(t, store.UpdateSessionIncremental(t.Context(), "session", db.IncrementalSessionUpdate{MsgCount: 1, TerminationStatus: dbtest.Ptr("awaiting_user")}))
+	hub.Enqueue([]string{"session"})
+	hub.process(t.Context())
+	require.Len(t, sent, 1)
+	assert.Equal(t, "turn_end", sent[0].Kind)
+	assert.Empty(t, sent[0].Excerpt)
+	hub.Enqueue([]string{"session"})
+	hub.process(t.Context())
 	assert.Len(t, sent, 1)
+}
+
+func TestHubTimestampFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, timestamp string
+		endedAt         *string
+		want            int
+	}{
+		{name: "missing row timestamp", endedAt: dbtest.Ptr("2026-01-01T12:00:00Z"), want: 1},
+		{name: "invalid row timestamp", timestamp: "invalid", endedAt: dbtest.Ptr("2026-01-01T12:00:00Z"), want: 1},
+		{name: "stale fallback", endedAt: dbtest.Ptr("2026-01-01T11:49:00Z")},
+		{name: "before hub started", endedAt: dbtest.Ptr("2026-01-01T11:59:58Z")},
+		{name: "missing fallback"},
+		{name: "invalid fallback", endedAt: dbtest.Ptr("invalid")},
+		{name: "valid stale row wins", timestamp: "2026-01-01T11:49:00Z", endedAt: dbtest.Ptr("2026-01-01T12:00:00Z")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := dbtest.OpenTestDB(t)
+			now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			var sent []Notification
+			hub := New(store, func() config.NotificationsConfig {
+				return config.NotificationsConfig{Enabled: true}
+			}, func(n Notification) { sent = append(sent, n) })
+			hub.now = func() time.Time { return now }
+			hub.since = now.Add(-time.Second)
+			_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{
+				Session: db.Session{ID: "session", Agent: "claude", Project: "demo", MessageCount: 1, EndedAt: tc.endedAt, TerminationStatus: dbtest.Ptr("awaiting_user")}, ReplaceMessages: true,
+				Messages: []db.Message{{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "done", Timestamp: tc.timestamp}},
+			}})
+			require.NoError(t, err)
+			hub.Enqueue([]string{"session"})
+			hub.process(t.Context())
+			require.Len(t, sent, tc.want)
+			if tc.want > 0 {
+				assert.Equal(t, "turn_end", sent[0].Kind)
+				assert.Equal(t, "done", sent[0].Excerpt)
+				now = now.Add(time.Second)
+				require.NoError(t, store.UpdateSessionIncremental(t.Context(), "session", db.IncrementalSessionUpdate{MsgCount: 1, EndedAt: dbtest.Ptr(now.Format(time.RFC3339Nano))}))
+				hub.Enqueue([]string{"session"})
+				hub.process(t.Context())
+				assert.Len(t, sent, 1, "fallback time changes preserve message identity")
+			}
+		})
+	}
 }
