@@ -808,7 +808,6 @@
   $effect(() => {
     if (notificationsEnabled) {
       return startNotificationWatcher(
-        () => settings.notifications.notify_new_reply,
         () => router.route === "sessions" ? sessions.activeSessionId : null,
       );
     }

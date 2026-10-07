@@ -189,7 +189,7 @@ func TestSaveSettingsPersistsNotifications(t *testing.T) {
 	require.NoError(t, err)
 	cfg.DataDir = dir
 	for _, enabled := range []bool{true, false} {
-		want := NotificationsConfig{Enabled: enabled, NotifyNewReply: true}
+		want := NotificationsConfig{Enabled: enabled}
 		require.NoError(t, cfg.SaveSettings(map[string]any{"notifications": want}))
 		assert.Equal(t, want, cfg.Notifications)
 		data, err := os.ReadFile(filepath.Join(dir, configFileName))

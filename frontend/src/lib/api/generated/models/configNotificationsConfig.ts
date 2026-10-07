@@ -4,5 +4,4 @@
 
 export interface ConfigNotificationsConfig {
   enabled: boolean;
-  notify_new_reply: boolean;
 }

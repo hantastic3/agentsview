@@ -5954,8 +5954,8 @@ func TestSettingsProviderChangesApplyThroughIngestionReloader(t *testing.T) {
 func TestSettingsNotificationsRoundTrip(t *testing.T) {
 	te := setup(t)
 	for _, body := range []string{
-		`{"notifications":{"enabled":true,"notify_new_reply":true}}`,
-		`{"notifications":{"enabled":false,"notify_new_reply":false}}`,
+		`{"notifications":{"enabled":true}}`,
+		`{"notifications":{"enabled":false}}`,
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")

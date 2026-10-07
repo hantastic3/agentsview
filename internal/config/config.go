@@ -872,8 +872,7 @@ type sessionSourceConfig struct {
 }
 
 type NotificationsConfig struct {
-	Enabled        bool `json:"enabled" toml:"enabled"`
-	NotifyNewReply bool `json:"notify_new_reply" toml:"notify_new_reply"`
+	Enabled bool `json:"enabled" toml:"enabled"`
 }
 
 // Config holds all application configuration.

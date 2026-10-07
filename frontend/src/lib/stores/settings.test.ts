@@ -53,12 +53,12 @@ describe("notification defaults", () => {
     const response = { agent_dirs: {}, chart_palette: "agentsview", terminal: { mode: "auto" } };
     settingsService.getApiV1Settings.mockResolvedValue(response);
     settingsService.putApiV1Settings.mockResolvedValue(response);
-    settings.notifications = { enabled: true, notify_new_reply: true };
+    settings.notifications = { enabled: true };
     await settings.load();
-    expect(settings.notifications).toEqual({ enabled: false, notify_new_reply: false });
-    settings.notifications = { enabled: true, notify_new_reply: true };
+    expect(settings.notifications).toEqual({ enabled: false });
+    settings.notifications = { enabled: true };
     expect(await settings.save({ notifications: settings.notifications })).toBe(true);
-    expect(settings.notifications).toEqual({ enabled: false, notify_new_reply: false });
+    expect(settings.notifications).toEqual({ enabled: false });
   });
 });
 

@@ -2379,16 +2379,13 @@
   "tool_sequences_full_result_in_message": "完整结果在消息 {ordinal} 中。",
   "tool_sequences_retry": "重试",
   "settings_notifications_title": "桌面通知",
-  "settings_notifications_description": "在 Agent 结束本轮回复或有新回复时获得通知",
-  "settings_notifications_keywords": "通知 桌面 提醒 回复 结束 notifications",
+  "settings_notifications_description": "在 Agent 结束回合时获得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回合 结束 notifications",
   "settings_notifications_unavailable": "此应用无法使用桌面通知。",
   "settings_notifications_os_settings": "通知遵循操作系统中 agentsview 的通知设置。",
   "settings_notifications_permission_denied": "通知权限被拒绝。请在系统设置中允许 AgentsView 发送通知。",
   "settings_notifications_enable": "启用桌面通知",
-  "settings_notifications_turn_end_hint": "仅限桌面应用。代理结束回合并等待你回复时发送通知。",
-  "settings_notifications_new_reply": "也通知新回复",
-  "settings_notifications_new_reply_hint": "代理仍在工作时，通知其最新的文本回复。每次刷新最多一条通知。",
-  "notification_turn_end_body": "Agent 已完成本轮回复，正在等待你的输入。",
-  "notification_new_reply_title_suffix": "{name}: 新回复",
-  "notification_turn_end_title_suffix": "{name}: 回复已完成"
+  "settings_notifications_turn_end_hint": "仅限桌面应用。代理结束回合并等待你输入时发送通知。",
+  "notification_turn_end_body": "Agent 已完成本回合，正在等待你的输入。",
+  "notification_turn_end_title_suffix": "{name}: 回合已完成"
 }

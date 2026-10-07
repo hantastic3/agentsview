@@ -1286,7 +1286,7 @@ organized into sections:
 | Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
 | Tool-result images | Preview and remove images from stored tool results                                                       |
 | Terminal           | Default terminal emulator for session resume                                                             |
-| Notifications      | Desktop notifications when an agent waits for you, plus optional alerts for new assistant text replies    |
+| Notifications      | Desktop notifications when an agent finishes its turn and waits for you                                  |
 | Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
 | GitHub             | Personal access token for Gist publishing                                                                |
 | Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
@@ -1297,11 +1297,10 @@ load; a saved language preference takes precedence.
 ![Settings with Spanish selected](/docs/assets/generated/screenshots/settings-spanish.png)
 
 Desktop notifications alert you when an agent finishes its turn and waits for
-you, including forks and continuations. The optional reply toggle shows the
-newest new assistant text reply while the agent is still working, once per
-refresh. History, restores, subagents, automated sessions, and the session in
-a focused window stay silent. Missed updates arrive within five minutes while
-the app runs. Toasts follow the OS notification settings for agentsview.
+you, including forks and continuations. History, restores, subagents, automated
+sessions, and the session in a focused window stay silent. Missed updates arrive
+within five minutes while the app runs. Toasts follow the OS notification
+settings for agentsview.
 On platforms that report denied permission, the toggle stays off and shows how
 to allow notifications. Apps without the notification bridge show unavailable.
 

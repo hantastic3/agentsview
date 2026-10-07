@@ -2450,16 +2450,13 @@
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
   "tool_sequences_retry": "再試行",
   "settings_notifications_title": "デスクトップ通知",
-  "settings_notifications_description": "エージェントがターンを終えたときや新しい返信を送ったときに通知を受け取る",
-  "settings_notifications_keywords": "通知 デスクトップ 返信 終了 notifications",
+  "settings_notifications_description": "エージェントがターンを終えたときに通知を受け取る",
+  "settings_notifications_keywords": "通知 デスクトップ ターン 終了 notifications",
   "settings_notifications_unavailable": "このアプリではデスクトップ通知を利用できません。",
   "settings_notifications_os_settings": "通知は OS の agentsview 通知設定に従います。",
   "settings_notifications_permission_denied": "通知の許可が拒否されました。システム設定で AgentsView の通知を許可してください。",
   "settings_notifications_enable": "デスクトップ通知を有効にする",
-  "settings_notifications_turn_end_hint": "デスクトップアプリのみ。エージェントがターンを終了し、あなたの応答を待つと通知します。",
-  "settings_notifications_new_reply": "新しい返信も通知する",
-  "settings_notifications_new_reply_hint": "エージェントの作業中に最新の新しいテキスト返信を通知します。更新ごとに1件の通知を送信します。",
+  "settings_notifications_turn_end_hint": "デスクトップアプリのみ。エージェントがターンを終了し、あなたの入力を待つと通知します。",
   "notification_turn_end_body": "エージェントはこのターンを終え、あなたの入力を待っています。",
-  "notification_new_reply_title_suffix": "{name}: 新しい返信",
-  "notification_turn_end_title_suffix": "{name}: 返信が完了しました"
+  "notification_turn_end_title_suffix": "{name}: ターンが完了しました"
 }

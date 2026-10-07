@@ -635,11 +635,8 @@ components:
       properties:
         enabled:
           type: boolean
-        notify_new_reply:
-          type: boolean
       required:
         - enabled
-        - notify_new_reply
       type: object
     ConfigRemoteHost:
       additionalProperties: false

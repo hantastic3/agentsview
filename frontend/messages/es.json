@@ -2464,16 +2464,13 @@
   "tool_sequences_full_result_in_message": "El resultado completo está en el mensaje {ordinal}.",
   "tool_sequences_retry": "Reintentar",
   "settings_notifications_title": "Notificaciones de escritorio",
-  "settings_notifications_description": "Recibe una notificación cuando un agente termine su turno o envíe una nueva respuesta",
-  "settings_notifications_keywords": "notificaciones alerta escritorio turno respuesta",
+  "settings_notifications_description": "Recibe una notificación cuando un agente termine su turno",
+  "settings_notifications_keywords": "notificaciones escritorio alertas fin de turno",
   "settings_notifications_unavailable": "Las notificaciones de escritorio no están disponibles en esta aplicación.",
   "settings_notifications_os_settings": "Las notificaciones siguen los ajustes de notificaciones del sistema operativo para agentsview.",
   "settings_notifications_permission_denied": "Se denegó el permiso de notificaciones. Permite las notificaciones de AgentsView en los ajustes del sistema.",
   "settings_notifications_enable": "Activar notificaciones de escritorio",
-  "settings_notifications_turn_end_hint": "Solo en la aplicación de escritorio. Recibes una notificación cuando el agente termina su turno y espera tu respuesta.",
-  "settings_notifications_new_reply": "Notificar también las nuevas respuestas",
-  "settings_notifications_new_reply_hint": "Mientras el agente trabaja, notificar su última respuesta de texto nueva. Una notificación por actualización.",
-  "notification_turn_end_body": "El agente terminó este turno y espera tu respuesta.",
-  "notification_new_reply_title_suffix": "{name}: nueva respuesta",
-  "notification_turn_end_title_suffix": "{name}: respuesta terminada"
+  "settings_notifications_turn_end_hint": "Solo en la aplicación de escritorio. Recibes una notificación cuando el agente termina su turno y espera tu entrada.",
+  "notification_turn_end_body": "El agente terminó este turno y espera tu entrada.",
+  "notification_turn_end_title_suffix": "{name}: turno terminado"
 }

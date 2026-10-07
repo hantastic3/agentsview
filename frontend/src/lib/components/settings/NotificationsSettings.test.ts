@@ -11,7 +11,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  settings.notifications = { enabled: false, notify_new_reply: false };
+  settings.notifications = { enabled: false };
   settings.readOnly = false;
   settings.saving = false;
 });
@@ -20,7 +20,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("saves each notification toggle and renders the saved value", async () => {
+it("saves the notification toggle and renders the saved value", async () => {
   const plugin = {
     isPermissionGranted: vi.fn().mockResolvedValue(false),
     requestPermission: vi.fn().mockResolvedValue("granted"),
@@ -44,34 +44,26 @@ it("saves each notification toggle and renders the saved value", async () => {
   };
   save.mockResolvedValue({
     ...response,
-    notifications: { enabled: true, notify_new_reply: false },
+    notifications: { enabled: true },
   });
   const { getByRole } = render(NotificationsSettings);
   const enabled = () => getByRole("switch", { name: "Enable desktop notifications" });
-  const replies = getByRole("switch", { name: "Also notify on new replies" });
-  expect(replies.hasAttribute("disabled")).toBe(true);
   expect(plugin.requestPermission).not.toHaveBeenCalled();
   await fireEvent.click(enabled());
   await waitFor(() =>
     expect(save).toHaveBeenCalledWith({
-      notifications: { enabled: true, notify_new_reply: false },
+      notifications: { enabled: true },
     }),
   );
   expect(plugin.requestPermission).toHaveBeenCalledOnce();
   expect((enabled() as HTMLInputElement).checked).toBe(true);
-  save.mockResolvedValue({ ...response, notifications: { enabled: true, notify_new_reply: true } });
-  await fireEvent.click(replies);
-  expect(save).toHaveBeenLastCalledWith({
-    notifications: { enabled: true, notify_new_reply: true },
-  });
-  expect((replies as HTMLInputElement).checked).toBe(true);
   save.mockResolvedValue({
     ...response,
-    notifications: { enabled: false, notify_new_reply: true },
+    notifications: { enabled: false },
   });
   await fireEvent.click(enabled());
   expect(save).toHaveBeenLastCalledWith({
-    notifications: { enabled: false, notify_new_reply: true },
+    notifications: { enabled: false },
   });
   expect(plugin.requestPermission).toHaveBeenCalledOnce();
   expect(plugin.sendNotification).not.toHaveBeenCalled();
@@ -112,8 +104,8 @@ it("explains denied permission when enabled settings load", async () => {
   expect(SettingsService.putApiV1Settings).not.toHaveBeenCalled();
 });
 
-it.each(["Enable desktop notifications", "Also notify on new replies"])("reverts %s after a failed save", async (name) => {
-  settings.notifications.enabled = name === "Also notify on new replies";
+it("reverts the toggle after a failed save", async () => {
+  const name = "Enable desktop notifications";
   vi.stubGlobal("__TAURI__", { notification: { isPermissionGranted: vi.fn().mockResolvedValue(true) } });
   vi.mocked(SettingsService.putApiV1Settings).mockRejectedValueOnce(new Error("save failed"));
   const { getByRole } = render(NotificationsSettings);

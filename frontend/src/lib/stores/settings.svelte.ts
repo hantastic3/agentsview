@@ -16,7 +16,7 @@ import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../uti
 import { insights } from "./insights.svelte.js";
 import { ui } from "./ui.svelte.js";
 
-const defaultNotifications = { enabled: false, notify_new_reply: false };
+const defaultNotifications = { enabled: false };
 
 export type ToolResultImagesPolicy = "keep" | "drop" | "offload";
 

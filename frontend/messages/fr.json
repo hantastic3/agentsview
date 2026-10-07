@@ -2461,16 +2461,13 @@
   "tool_sequences_full_result_in_message": "Le résultat complet se trouve dans le message {ordinal}.",
   "tool_sequences_retry": "Réessayer",
   "settings_notifications_title": "Notifications de bureau",
-  "settings_notifications_description": "Être notifié quand un agent termine son tour ou envoie une nouvelle réponse",
-  "settings_notifications_keywords": "notifications bureau alerte réponse notifications",
+  "settings_notifications_description": "Être notifié quand un agent termine son tour",
+  "settings_notifications_keywords": "notifications bureau alertes fin de tour",
   "settings_notifications_unavailable": "Les notifications de bureau sont indisponibles dans cette application.",
   "settings_notifications_os_settings": "Les notifications suivent les paramètres de notification du système pour agentsview.",
   "settings_notifications_permission_denied": "Les notifications ont été refusées. Autorisez les notifications pour AgentsView dans les paramètres système.",
   "settings_notifications_enable": "Activer les notifications de bureau",
-  "settings_notifications_turn_end_hint": "Uniquement dans l’application de bureau. Vous êtes averti quand un agent termine son tour et attend votre réponse.",
-  "settings_notifications_new_reply": "Notifier aussi les nouvelles réponses",
-  "settings_notifications_new_reply_hint": "Pendant que l’agent travaille, afficher sa dernière nouvelle réponse textuelle. Une notification par actualisation.",
+  "settings_notifications_turn_end_hint": "Uniquement dans l'application de bureau. Vous êtes averti quand un agent termine son tour et attend votre saisie.",
   "notification_turn_end_body": "L'agent a terminé ce tour et vous attend.",
-  "notification_new_reply_title_suffix": "{name}: nouvelle réponse",
-  "notification_turn_end_title_suffix": "{name}: réponse terminée"
+  "notification_turn_end_title_suffix": "{name}: tour terminé"
 }
