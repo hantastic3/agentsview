@@ -198,5 +198,4 @@ func TestSaveSettingsPersistsNotifications(t *testing.T) {
 		require.NoError(t, reloaded.applyConfigTOML(string(data)))
 		assert.Equal(t, want, reloaded.Notifications)
 	}
-	require.Error(t, cfg.SaveSettings(map[string]any{"notifications": map[string]any{"enabled": true}}))
 }

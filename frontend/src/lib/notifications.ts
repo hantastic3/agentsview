@@ -72,7 +72,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
     }
     running = true;
     try {
-      if (!(await notificationPermissionGranted()) || stopped) return;
+      if (stopped) return;
       const fetchedAt = Date.now();
       const rows: DbSession[] = [];
       let cursor: string | undefined;
@@ -103,24 +103,40 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
           !silent &&
           row.termination_status === "awaiting_user" &&
           (previous
-            ? previous.status !== "awaiting_user" || previous.user_message_count !== row.user_message_count
+            ? previous.status !== "awaiting_user" ||
+              previous.user_message_count !== row.user_message_count
             : activity > startedAt);
         if (
-          !silent && !turnEnd && previous?.status === "awaiting_user" &&
-          row.termination_status === "awaiting_user" && row.message_count > previous.message_count
+          !silent &&
+          !turnEnd &&
+          previous?.status === "awaiting_user" &&
+          row.termination_status === "awaiting_user" &&
+          row.message_count > previous.message_count
         ) {
           try {
-            const result = await SessionsService.getApiV1SessionsByIdMessages(
-              { id: row.id },
-              { direction: "desc", limit: Math.min(row.message_count - previous.message_count, 100) },
-            );
-            turnEnd = result.messages.some((message) => message.ordinal >= previous.message_count && !message.is_system && message.role === "assistant");
+            let from = row.message_count - 1;
+            while (from >= previous.message_count && !stopped) {
+              const result = await SessionsService.getApiV1SessionsByIdMessages(
+                { id: row.id },
+                { direction: "desc", from, limit: from - previous.message_count + 1 },
+              );
+              if (!result.messages.length) break;
+              turnEnd ||= result.messages.some(
+                (message) =>
+                  message.ordinal >= previous.message_count &&
+                  !message.is_system &&
+                  message.role === "assistant",
+              );
+              from = result.messages[result.messages.length - 1]!.ordinal - 1;
+            }
             if (turnEnd) {
               const current = await SessionsService.getApiV1SessionsById({ id: row.id });
               if (
                 current.termination_status !== "awaiting_user" ||
-                current.user_message_count !== row.user_message_count || current.message_count !== row.message_count
-              ) continue;
+                current.user_message_count !== row.user_message_count ||
+                current.message_count !== row.message_count
+              )
+                continue;
             }
           } catch (err) {
             console.warn("notification turn-end read failed", err);

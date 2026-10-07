@@ -3556,11 +3556,6 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
 	patch = maps.Clone(patch)
-	if value, ok := patch["notifications"]; ok {
-		if _, ok := value.(NotificationsConfig); !ok {
-			return errors.New("notifications must use the typed configuration value")
-		}
-	}
 	if value, ok := patch["tool_result_images"]; ok {
 		policy, ok := value.(ToolResultImages)
 		if !ok {

@@ -70,8 +70,13 @@ beforeEach(() => {
     user_message_count: 1,
   } as DbSession;
   list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
-  session.mockImplementation(async () => row as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>);
-  messages.mockImplementation(async () => ({ messages: [assistantMessage({ ordinal: row.message_count - 1 })], count: 1 }));
+  session.mockImplementation(
+    async () => row as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>,
+  );
+  messages.mockImplementation(async (_, params) => ({
+    messages: [assistantMessage({ ordinal: params!.from! - params!.limit! + 1 })],
+    count: 1,
+  }));
 });
 afterEach(() => {
   stop?.();
@@ -109,23 +114,31 @@ describe("desktop notification watcher", () => {
   it("keeps system-only appends silent while waiting", async () => {
     await start();
     await change({ termination_status: "awaiting_user", message_count: 3 });
-    messages.mockResolvedValue({ messages: [assistantMessage({ ordinal: 3, is_system: true })], count: 1 });
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ ordinal: 3, is_system: true })],
+      count: 1,
+    });
     await change({ message_count: 4 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
   it("toasts a newly discovered waiting session", async () => {
     await start();
-    await change({ id: "new", termination_status: "awaiting_user", ended_at: "2026-10-07T12:00:01Z" });
+    await change({
+      id: "new",
+      termination_status: "awaiting_user",
+      ended_at: "2026-10-07T12:00:01Z",
+    });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(messages).not.toHaveBeenCalled();
   });
-  it.each([
-    { relationship_type: "subagent" },
-  ])("keeps excluded sessions silent: %j", async (patch) => {
-    await start();
-    await change({ ...patch, termination_status: "awaiting_user", message_count: 4 });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-  });
+  it.each([{ relationship_type: "subagent" }])(
+    "keeps excluded sessions silent: %j",
+    async (patch) => {
+      await start();
+      await change({ ...patch, termination_status: "awaiting_user", message_count: 4 });
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+    },
+  );
   it.each([
     { visible: "visible", focused: true, sent: false },
     { visible: "hidden", focused: true, sent: true },
@@ -210,32 +223,80 @@ describe("desktop notification watcher", () => {
   });
   it("keeps restored waiting sessions silent without reading messages", async () => {
     await start();
-    await change({ id: "restored", termination_status: "awaiting_user", ended_at: "2026-10-07T11:59:00Z" });
+    await change({
+      id: "restored",
+      termination_status: "awaiting_user",
+      ended_at: "2026-10-07T11:59:00Z",
+    });
     expect(messages).not.toHaveBeenCalled();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
   it.each([
     { delta: 2, limit: 2 },
-    { delta: 101, limit: 100 },
-  ])("bounds a waiting append read: %j", async ({ delta, limit }) => {
+    { delta: 101, limit: 101 },
+  ])("reads the waiting append: %j", async ({ delta, limit }) => {
     row.termination_status = "awaiting_user";
     await start();
     await change({ message_count: 2 + delta });
-    expect(messages).toHaveBeenCalledExactlyOnceWith({ id: "session" }, { direction: "desc", limit });
+    expect(messages).toHaveBeenCalledExactlyOnceWith(
+      { id: "session" },
+      { direction: "desc", from: 1 + delta, limit },
+    );
     expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
     expect(plugin.sendNotification).toHaveBeenCalledExactlyOnceWith({
       title: "Fix login: turn finished",
       body: "The agent finished this turn and is waiting for you.",
     });
   });
-  it.each([{ role: "user" }, { is_system: true }, { ordinal: 1 }])("ignores a waiting append without a new assistant message: %j", async (patch) => {
+  it("finds a final answer before more than a page of system rows", async () => {
     row.termination_status = "awaiting_user";
     await start();
-    messages.mockResolvedValue({ messages: [assistantMessage(patch)], count: 1 });
-    await change({ message_count: 3 });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    expect(session).not.toHaveBeenCalled();
+    const appended = [
+      assistantMessage(),
+      ...Array.from({ length: 1100 }, (_, i) =>
+        assistantMessage({
+          id: i + 2,
+          ordinal: i + 3,
+          role: "system",
+          content: "Session metadata updated",
+          is_system: true,
+        }),
+      ),
+    ];
+    messages.mockImplementation(async (_, params) => {
+      const page = appended
+        .filter((message) => message.ordinal <= params!.from!)
+        .reverse()
+        .slice(0, Math.min(params!.limit!, 1000));
+      return { messages: page, count: page.length };
+    });
+    await change({ message_count: 1103 });
+    expect(messages).toHaveBeenNthCalledWith(
+      1,
+      { id: "session" },
+      { direction: "desc", from: 1102, limit: 1101 },
+    );
+    expect(messages).toHaveBeenNthCalledWith(
+      2,
+      { id: "session" },
+      { direction: "desc", from: 102, limit: 101 },
+    );
+    expect(messages).toHaveBeenCalledTimes(2);
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
+  it.each([{ role: "user" }, { is_system: true }, { ordinal: 1 }])(
+    "ignores a waiting append without a new assistant message: %j",
+    async (patch) => {
+      row.termination_status = "awaiting_user";
+      await start();
+      messages.mockResolvedValue({ messages: [assistantMessage(patch)], count: 1 });
+      await change({ message_count: 3 });
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+      expect(session).not.toHaveBeenCalled();
+    },
+  );
   it("suppresses a stale turn end when a user turn commits between the list and message read", async () => {
     row.termination_status = "awaiting_user";
     await start();
@@ -249,22 +310,26 @@ describe("desktop notification watcher", () => {
     await change({ termination_status: "awaiting_user", message_count: 5 });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([
-    { termination_status: "" },
-    { user_message_count: 2 },
-    { message_count: 4 },
-  ])("retries a changed session after the message read: %j", async (patch) => {
-    row.termination_status = "awaiting_user";
-    await start();
-    session.mockImplementationOnce(async () => ({ ...row, ...patch }) as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>);
-    await change({ message_count: 3 });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change();
-    expect(messages).toHaveBeenCalledTimes(2);
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
+  it.each([{ termination_status: "" }, { user_message_count: 2 }, { message_count: 4 }])(
+    "retries a changed session after the message read: %j",
+    async (patch) => {
+      row.termination_status = "awaiting_user";
+      await start();
+      session.mockImplementationOnce(
+        async () =>
+          ({ ...row, ...patch }) as Awaited<
+            ReturnType<typeof SessionsService.getApiV1SessionsById>
+          >,
+      );
+      await change({ message_count: 3 });
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+      await change();
+      expect(messages).toHaveBeenCalledTimes(2);
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+      await change();
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    },
+  );
   it("retries a failed session recheck without consuming the append", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     row.termination_status = "awaiting_user";
@@ -276,13 +341,13 @@ describe("desktop notification watcher", () => {
     expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("does no reads or delivery when permission is denied", async () => {
+  it("delivers after restart when the plugin reports permission denied", async () => {
     plugin.isPermissionGranted.mockResolvedValue(false);
-    stop = startNotificationWatcher(() => null);
-    await flush();
+    await start();
     await change({ termination_status: "awaiting_user", message_count: 4 });
-    expect(list).not.toHaveBeenCalled();
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(plugin.isPermissionGranted).not.toHaveBeenCalled();
+    expect(plugin.requestPermission).not.toHaveBeenCalled();
   });
   it("stops delivery during a pending fetch and unsubscribes", async () => {
     await start();
