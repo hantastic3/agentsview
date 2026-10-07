@@ -21,8 +21,13 @@ type Notification struct {
 }
 
 type sessionState struct {
-	turnEnd, replyEnd  time.Time
+	turnEnd, replyEnd  *messageIdentity
 	lastReply, endedAt time.Time
+}
+
+type messageIdentity struct {
+	ordinal   int
+	timestamp string
 }
 
 type sessionStore interface {
@@ -132,8 +137,8 @@ func (h *Hub) process(ctx context.Context) time.Time {
 		}
 		state := h.seen[id]
 		state.endedAt = endedAt
-		turnEnd := session.TerminationStatus != nil && *session.TerminationStatus == "awaiting_user" && !endedAt.Equal(state.turnEnd)
-		if !turnEnd && (!cfg.NotifyNewReply || endedAt.Equal(state.replyEnd) || endedAt.Equal(state.turnEnd)) {
+		awaitingUser := session.TerminationStatus != nil && *session.TerminationStatus == "awaiting_user"
+		if !awaitingUser && !cfg.NotifyNewReply {
 			h.seen[id] = state
 			continue
 		}
@@ -145,6 +150,16 @@ func (h *Hub) process(ctx context.Context) time.Time {
 			}
 			continue
 		}
+		identity := messageIdentity{ordinal: -1}
+		if latest != nil {
+			identity = messageIdentity{ordinal: latest.Ordinal, timestamp: latest.Timestamp}
+		}
+		alreadyEnded := state.turnEnd != nil && *state.turnEnd == identity
+		turnEnd := awaitingUser && !alreadyEnded
+		if !turnEnd && (!cfg.NotifyNewReply || alreadyEnded || state.replyEnd != nil && *state.replyEnd == identity) {
+			h.seen[id] = state
+			continue
+		}
 		n := Notification{Kind: "turn_end", SessionID: id, Project: session.Project, Agent: session.Agent}
 		if session.DisplayName != nil {
 			n.DisplayName = *session.DisplayName
@@ -153,7 +168,7 @@ func (h *Hub) process(ctx context.Context) time.Time {
 			n.Excerpt = stringutil.TruncateRunes(latest.Content, 160, "…")
 		}
 		if turnEnd {
-			state.turnEnd = endedAt
+			state.turnEnd = &identity
 		} else if latest == nil || latest.Role != "assistant" {
 			h.seen[id] = state
 			continue
@@ -163,7 +178,7 @@ func (h *Hub) process(ctx context.Context) time.Time {
 			continue
 		} else {
 			n.Kind = "new_reply"
-			state.replyEnd, state.lastReply = endedAt, now
+			state.replyEnd, state.lastReply = &identity, now
 		}
 		h.seen[id] = state
 		h.publish(n)

@@ -103,7 +103,7 @@ func TestHubReplyThrottleAndTurnEnd(t *testing.T) {
 			},
 			ReplaceMessages: true,
 			Messages: []db.Message{
-				{SessionID: "session", Ordinal: 0, Role: "assistant", Content: content},
+				{SessionID: "session", Ordinal: 0, Role: "assistant", Content: content, Timestamp: now.Format(time.RFC3339Nano)},
 				{SessionID: "session", Ordinal: 1, Role: "user", Content: "system notice", IsSystem: true},
 			},
 		}})
@@ -142,6 +142,7 @@ func TestHubAnswerIdentity(t *testing.T) {
 			store := dbtest.OpenTestDB(t)
 			now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 			ended := now.Format(time.RFC3339Nano)
+			answerAt := ended
 			var sent []Notification
 			hub := New(store, func() config.NotificationsConfig {
 				return config.NotificationsConfig{Enabled: true, NotifyNewReply: true}
@@ -156,7 +157,7 @@ func TestHubAnswerIdentity(t *testing.T) {
 				t.Helper()
 				messages := []db.Message{
 					{SessionID: "session", Ordinal: 0, Role: "user", Content: "question"},
-					{SessionID: "session", Ordinal: 1, Role: "assistant", Content: content},
+					{SessionID: "session", Ordinal: 1, Role: "assistant", Content: content, Timestamp: answerAt},
 				}
 				if count == 3 {
 					messages = append(messages, db.Message{SessionID: "session", Ordinal: 2, Role: "user", IsSystem: true, Content: "system notice"})
@@ -173,13 +174,26 @@ func TestHubAnswerIdentity(t *testing.T) {
 			write("first answer", 2)
 			require.Len(t, sent, 1)
 			assert.Equal(t, kind, sent[0].Kind)
+			now = now.Add(time.Second)
+			ended = now.Format(time.RFC3339Nano)
+			write("first answer", 3)
+			assert.Len(t, sent, 1, "a system-only append moves ended_at without publishing again")
 			now = now.Add(time.Minute)
 			ended = now.Format(time.RFC3339Nano)
+			answerAt = ended
 			write("retry answer", 2)
 			require.Len(t, sent, 2)
 			assert.Equal(t, "retry answer", sent[1].Excerpt)
+			now = now.Add(time.Minute)
+			ended = now.Format(time.RFC3339Nano)
 			write("image stripped", 3)
 			assert.Len(t, sent, 2, "rewrites keep the answer timestamp even when the count changes")
+			now = now.Add(time.Minute)
+			ended = now.Format(time.RFC3339Nano)
+			answerAt = ended
+			write("new answer", 3)
+			require.Len(t, sent, 3, "a replaced answer has a new identity even with the same ordinal and count")
+			assert.Equal(t, "new answer", sent[2].Excerpt)
 		})
 	}
 }

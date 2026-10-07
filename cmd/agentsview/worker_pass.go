@@ -320,6 +320,9 @@ func workerWritePassLocked(
 		if err := engine.ReloadSkipCache(recoveryCtx); err != nil {
 			workerErr = errors.Join(workerErr, err)
 		}
+		if err := database.NotifySessionWritesSince(recoveryCtx, time.Now().Add(-10*time.Minute)); err != nil {
+			workerErr = errors.Join(workerErr, err)
+		}
 	}
 	return result, workerErr
 }

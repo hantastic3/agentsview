@@ -221,6 +221,66 @@ func TestRunWorkerWritePassReloadsSkipCacheBeforeReleasingLock(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRunWorkerWritePassCatchesUpSessionObserver(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		workerErr  error
+	}{
+		{name: "audit", mode: "audit"},
+		{name: "foreground sync", mode: "sync"},
+		{name: "failed worker with committed writes", mode: "audit", workerErr: errors.New("worker result lost")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database, lock := openTestWriteDB(t, cfg)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{})
+			defer engine.Close()
+			var observed []string
+			database.SetSessionWriteObserver(func(ids []string) {
+				assert.NoError(t, writeOneSession(t.Context(), database), "writer restored before catch-up")
+				observed = append(observed, ids...)
+			})
+			var want []string
+			restore := stubLaunchSyncWorker(t, func(
+				_ context.Context, workerCfg config.Config, request syncWorkerRequest, _ func(workerLine),
+			) (workerResult, error) {
+				assert.Equal(t, tc.mode, request.Mode)
+				workerDB, err := db.Open(t.Context(), workerCfg.DBPath)
+				require.NoError(t, err)
+				defer workerDB.Close()
+				now := time.Now().UTC()
+				for i := range 257 {
+					id := fmt.Sprintf("recent-%03d", i)
+					want = append(want, id)
+					require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{
+						ID: id, Project: "demo", Agent: "claude", MessageCount: 1,
+						EndedAt:           dbtest.Ptr(now.Add(-time.Minute).Format(time.RFC3339Nano)),
+						TerminationStatus: dbtest.Ptr("awaiting_user"),
+					}))
+				}
+				require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{
+					ID: "old", Project: "demo", Agent: "claude", MessageCount: 1,
+					EndedAt: dbtest.Ptr(now.Add(-time.Hour).Format(time.RFC3339Nano)),
+				}))
+				require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{
+					ID: "started-only", Project: "demo", Agent: "claude", MessageCount: 1,
+					StartedAt: dbtest.Ptr(now.Format(time.RFC3339Nano)),
+				}))
+				assert.Empty(t, observed, "worker writes bypass the daemon's observer")
+				return workerResult{Status: "ok", DiscoveryComplete: true}, tc.workerErr
+			})
+			defer restore()
+			_, err := runWorkerWritePass(t.Context(), t.Context(), cfg, engine, database, lock, tc.mode, nil)
+			if tc.workerErr != nil {
+				require.ErrorIs(t, err, tc.workerErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.ElementsMatch(t, want, observed, "all pages of recent ended sessions reach the observer")
+		})
+	}
+}
+
 // TestRunWorkerWritePassKeepsSkipCacheOnSpawnFailure pins the reload gate: when
 // no worker ever ran, the archive was not touched, so the daemon's in-memory
 // skip state (which may be ahead of the last persisted snapshot) must be kept
