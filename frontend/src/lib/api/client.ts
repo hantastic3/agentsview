@@ -149,7 +149,17 @@ export function watchSession(
  */
 export const WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS = 5;
 
+export interface DesktopNotification {
+  kind: "turn_end" | "new_reply";
+  session_id: string;
+  project: string;
+  agent: string;
+  display_name: string;
+  excerpt: string;
+}
+
 export interface WatchEventsOptions {
+  onNotification?: (n: DesktopNotification) => void;
   /** Called once when the circuit breaker trips WITHOUT the
    * EventSource ever having reached the OPEN state. That pattern
    * indicates the endpoint is permanently unreachable for this
@@ -214,6 +224,21 @@ export function watchEvents(
       onEvent({ scope });
     } else {
       onEvent({ scope: "sync" });
+    }
+  });
+
+  es.addEventListener("notification", (msg) => {
+    let n: DesktopNotification;
+    try {
+      n = JSON.parse((msg as MessageEvent).data);
+    } catch {
+      return;
+    }
+    if (n && (n.kind === "turn_end" || n.kind === "new_reply") &&
+      [n.session_id, n.project, n.agent, n.display_name, n.excerpt].every((v) => typeof v === "string")) {
+      consecutiveErrors = 0;
+      hasOpened = true;
+      opts.onNotification?.(n);
     }
   });
 

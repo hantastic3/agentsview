@@ -1,6 +1,7 @@
 import { m } from "../../i18n/index.js";
 
 export type SettingsPanelId =
+  | "notifications"
   | "appearance"
   | "language"
   | "date-ranges"
@@ -28,6 +29,14 @@ export function settingsPanels(): SettingsPanelMeta[] {
   const connections = m.settings_group_connections();
 
   return [
+    {
+      id: "notifications",
+      label: m.settings_notifications_title(),
+      title: m.settings_notifications_title(),
+      description: m.settings_notifications_description(),
+      group: preferences,
+      keywords: m.settings_notifications_keywords(),
+    },
     {
       id: "appearance",
       label: m.appearance_title(),

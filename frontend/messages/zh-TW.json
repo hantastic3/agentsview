@@ -2377,5 +2377,15 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。","countPlural=other":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。"}}],
   "tool_sequences_full_input_in_message": "完整輸入在訊息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整結果在訊息 {ordinal} 中。",
-  "tool_sequences_retry": "重試"
+  "tool_sequences_retry": "重試",
+  "settings_notifications_title": "桌面通知",
+  "settings_notifications_description": "在 Agent 結束本輪回覆或有新回覆時取得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回覆 結束 notifications",
+  "settings_notifications_enable": "啟用桌面通知",
+  "settings_notifications_turn_end_hint": "僅限桌面應用程式。代理結束回合並等待你回覆時傳送通知。",
+  "settings_notifications_new_reply": "也通知新回覆",
+  "settings_notifications_new_reply_hint": "每個工作階段每分鐘最多一則通知。待傳送的通知顯示最新回覆。",
+  "notification_turn_end_body": "Agent 已完成本輪回覆，正在等待你的輸入。",
+  "notification_new_reply_title_suffix": "{name}: 新回覆",
+  "notification_turn_end_title_suffix": "{name}: 回覆已完成"
 }

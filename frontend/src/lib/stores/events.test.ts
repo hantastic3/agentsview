@@ -59,6 +59,27 @@ afterEach(() => {
 });
 
 describe("events store", () => {
+  it("dispatches notification frames without refreshing data", async () => {
+    const { events } = await import("./events.svelte.js");
+    const deliver = vi.fn();
+    const refresh = vi.fn();
+    events.onNotification = deliver;
+    const unsub = events.subscribe(refresh);
+    const n = {
+      kind: "turn_end",
+      session_id: "session",
+      project: "demo",
+      agent: "claude",
+      display_name: "Fix login",
+      excerpt: "done",
+    };
+    FakeEventSource.instances[0]!.fire("notification", n);
+    FakeEventSource.instances[0]!.fire("notification", { kind: "invalid" });
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(n);
+    expect(refresh).not.toHaveBeenCalled();
+    events.onNotification = null;
+    unsub();
+  });
   it("does not open an EventSource while live events are unavailable", async () => {
     const { events } = await import("./events.svelte.js");
     events.setAvailable(false);

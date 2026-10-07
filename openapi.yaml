@@ -630,6 +630,17 @@ components:
         - machine_name
         - allow_insecure
       type: object
+    ConfigNotificationsConfig:
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        notify_new_reply:
+          type: boolean
+      required:
+        - enabled
+        - notify_new_reply
+      type: object
     ConfigRemoteHost:
       additionalProperties: false
       properties:
@@ -7131,6 +7142,8 @@ components:
         insight_default_agent:
           description: Agent CLI used when an insight generation request does not choose one
           type: string
+        notifications:
+          $ref: "#/components/schemas/ConfigNotificationsConfig"
         port:
           format: int64
           type: integer
@@ -7167,6 +7180,7 @@ components:
             - 200
           type: integer
       required:
+        - notifications
         - agent_dirs
         - session_providers
         - disabled_agents
@@ -7197,6 +7211,8 @@ components:
           items:
             type: string
           type: array
+        notifications:
+          $ref: "#/components/schemas/ConfigNotificationsConfig"
         require_auth:
           type: boolean
         terminal:

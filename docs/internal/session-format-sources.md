@@ -176,6 +176,11 @@ fixtures retain this field; missing identities remain source-local.
   identities and usage, then checks actual parsed counts. These synthetic
   records are a measured subset, not an authoritative or exhaustive schema.
 
+- **Incremental turn status (2026-10-07):** Rechecked `message.stop_reason`
+  against the stored Claude fixtures and full parser. Incremental assistant
+  tails now use the same classifier; `end_turn` means `awaiting_user`.
+  User-only tails leave the incremental status unset.
+
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 

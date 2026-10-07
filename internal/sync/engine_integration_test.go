@@ -18373,3 +18373,28 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 		})
 	}
 }
+
+func TestIncrementalSync_ClaudeEndTurnUpdatesTermination(t *testing.T) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly))
+	path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
+	env.engine.SyncAll(t.Context(), nil)
+	before := fetchMessages(t, env.db, "notify")
+	require.Len(t, before, 1)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	env.engine.SyncPaths([]string{path})
+	session, err := env.db.GetSessionFull(t.Context(), "notify")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TerminationStatus)
+	assert.Equal(t, "awaiting_user", *session.TerminationStatus)
+	assert.True(t, session.LastWriteIncremental)
+	after := fetchMessages(t, env.db, "notify")
+	require.Len(t, after, 2)
+	assert.Equal(t, before[0].ID, after[0].ID)
+	assert.Equal(t, "done", after[1].Content)
+}

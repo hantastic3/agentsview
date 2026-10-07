@@ -871,10 +871,16 @@ type sessionSourceConfig struct {
 	Machine *string `toml:"machine"`
 }
 
+type NotificationsConfig struct {
+	Enabled        bool `json:"enabled" toml:"enabled"`
+	NotifyNewReply bool `json:"notify_new_reply" toml:"notify_new_reply"`
+}
+
 // Config holds all application configuration.
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Config struct {
+	Notifications        NotificationsConfig         `json:"notifications" toml:"notifications"`
 	Host                 string                      `json:"host" toml:"host"`
 	Port                 int                         `json:"port" toml:"port"`
 	ChartPalette         ChartPalette                `json:"chart_palette" toml:"chart_palette"`
@@ -1628,6 +1634,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		return err
 	}
 	var file struct {
+		Notifications                  NotificationsConfig    `toml:"notifications"`
 		LocalMachineName               *string                `toml:"local_machine_name"`
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
@@ -1765,6 +1772,9 @@ func (c *Config) applyConfigTOML(data string) error {
 			return err
 		}
 		c.ToolResultImages = policy
+	}
+	if meta.IsDefined("notifications") {
+		c.Notifications = file.Notifications
 	}
 	if file.Terminal.Mode != "" {
 		c.Terminal = file.Terminal
@@ -3547,6 +3557,11 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
 	patch = maps.Clone(patch)
+	if value, ok := patch["notifications"]; ok {
+		if _, ok := value.(NotificationsConfig); !ok {
+			return errors.New("notifications must use the typed configuration value")
+		}
+	}
 	if value, ok := patch["tool_result_images"]; ok {
 		policy, ok := value.(ToolResultImages)
 		if !ok {
@@ -3638,6 +3653,9 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		}
 
 		// Update in-memory config for known keys.
+		if v, ok := patch["notifications"].(NotificationsConfig); ok {
+			c.Notifications = v
+		}
 		if v, ok := patch["terminal"]; ok {
 			if tc, ok := v.(TerminalConfig); ok {
 				c.Terminal = tc

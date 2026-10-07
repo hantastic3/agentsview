@@ -1035,3 +1035,38 @@ func claudeProviderFixture(firstMessage string) string {
 		testjsonl.ClaudeAssistantJSON("Done.", tsEarlyS1),
 	)
 }
+
+func TestClaudeProviderIncrementalTermination(t *testing.T) {
+	for _, tc := range []struct {
+		name, tail string
+		want       *TerminationStatus
+	}{
+		{name: "assistant end turn", tail: `{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n", want: new(TerminationAwaitingUser)},
+		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "session.jsonl")
+			initial := testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n"
+			writeSourceFile(t, path, initial+tc.tail)
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "session"})
+			require.NoError(t, err)
+			require.True(t, ok)
+			outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
+				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: int64(len(initial + tc.tail))},
+				SessionID: "session", Offset: int64(len(initial)), StartOrdinal: 1,
+			})
+			require.NoError(t, err)
+			require.Equal(t, IncrementalApplied, status)
+			assert.Equal(t, tc.want, outcome.TerminationStatus)
+			if tc.want != nil {
+				full, err := parseClaudeSession(path, "project", "local")
+				require.NoError(t, err)
+				require.NotEmpty(t, full)
+				assert.Equal(t, TerminationAwaitingUser, full[0].Session.TerminationStatus)
+			}
+		})
+	}
+}

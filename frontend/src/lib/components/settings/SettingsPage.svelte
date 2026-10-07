@@ -14,6 +14,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, isRemoteConnection } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
+  import NotificationsSettings from "./NotificationsSettings.svelte";
   import AppearanceSettings from "./AppearanceSettings.svelte";
   import AgentDirSettings from "./AgentDirSettings.svelte";
   import DateRangeSettings from "./DateRangeSettings.svelte";
@@ -197,7 +198,9 @@
         {#each panels as meta (meta.id)}
           <div class="settings-panel" hidden={meta.id !== activeId}>
             <SettingsSection title={meta.title} description={meta.description}>
-              {#if meta.id === "appearance"}
+              {#if meta.id === "notifications"}
+                <NotificationsSettings />
+              {:else if meta.id === "appearance"}
                 <AppearanceSettings />
               {:else if meta.id === "language"}
                 <LanguageSettings />

@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/notify"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -549,6 +550,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
 	))
 	srv := server.New(cfg, database, engine, srvOpts...)
+	notificationHub := notify.New(database, srv.NotificationsConfig, func(n notify.Notification) {
+		broadcaster.Publish("notification", n)
+	})
+	database.SetSessionWriteObserver(notificationHub.Enqueue)
+	go notificationHub.Run(ctx)
 
 	startupProgress.SetPhase("starting HTTP server")
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)

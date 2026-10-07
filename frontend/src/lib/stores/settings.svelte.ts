@@ -73,6 +73,7 @@ class SettingsStore {
   readOnly: boolean = $state(false);
   chartPalette: ChartPalette = $state(DEFAULT_CHART_PALETTE);
   toolResultImages: ToolResultImagesPolicy = $state("keep");
+  notifications: AppSettings["notifications"] = $state({ enabled: false, notify_new_reply: false });
   loaded: boolean = $state(false);
   loading: boolean = $state(false);
   saving: boolean = $state(false);
@@ -118,6 +119,7 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      this.notifications = data.notifications ?? { enabled: false, notify_new_reply: false };
       ui.applyZoomDefault(data.zoom_level);
       // Older servers omit the field; applyDefaultAgent then keeps the
       // built-in agent.
@@ -191,6 +193,7 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      this.notifications = data.notifications ?? { enabled: false, notify_new_reply: false };
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.
       this.toolResultImages =

@@ -1349,7 +1349,17 @@ func (m *usageCacheManager) NotifyCursorUsage() {
 	}
 }
 
+// SetSessionWriteObserver installs a non-blocking observer called after committed writes.
+func (db *DB) SetSessionWriteObserver(observer func([]string)) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.sessionWriteObserver = observer
+}
+
 func (db *DB) notifyUsageSessions(sessionIDs []string) {
+	if db.sessionWriteObserver != nil && len(sessionIDs) > 0 {
+		db.sessionWriteObserver(sessionIDs)
+	}
 	if db.usageCache != nil && len(sessionIDs) > 0 {
 		db.usageCache.NotifySessions(sessionIDs)
 	}

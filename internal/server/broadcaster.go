@@ -10,11 +10,11 @@ import (
 // starts dropping events on its channel.
 const broadcasterBufferCap = 8
 
-// Event is a refresh signal sent by the sync engine after a pass
-// that wrote data. Scope is advisory — subscribers may filter on
-// it but are free to treat it as "refetch now".
+// Event carries a named payload or an advisory refresh scope.
 type Event struct {
-	Scope string
+	Name    string
+	Payload any
+	Scope   string
 }
 
 // Broadcaster fans out Event values from the sync engine to all
@@ -64,6 +64,13 @@ func NewBroadcaster(minInterval time.Duration) *Broadcaster {
 // Delivery is non-blocking: if a subscriber's buffer is full, the
 // event is dropped for that subscriber. The engine never blocks on
 // slow clients.
+// Publish delivers named events without coalescing refresh signals.
+func (b *Broadcaster) Publish(name string, payload any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.broadcastLocked(Event{Name: name, Payload: payload})
+}
+
 func (b *Broadcaster) Emit(scope string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
