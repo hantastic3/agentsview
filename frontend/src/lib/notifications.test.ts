@@ -66,7 +66,7 @@ beforeEach(() => {
     display_name: "Fix login",
     ended_at: "2026-10-07T12:00:00Z",
     message_count: 2,
-    is_automated: false,
+    user_message_count: 1,
   } as DbSession;
   list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
   messages.mockResolvedValue({ messages: [reply()], count: 1 });
@@ -92,14 +92,29 @@ describe("desktop notification watcher", () => {
       include_one_shot: true,
     });
   });
-  it("toasts a waiting transition once and a later turn with more messages", async () => {
+  it("toasts a waiting transition once and a later user turn", async () => {
     await start();
     await change({ termination_status: "awaiting_user" });
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(plugin.sendNotification.mock.calls[0]![0].title).toContain("Fix login");
-    await change({ message_count: 4 });
+    await change({ message_count: 4, user_message_count: 2 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
+  });
+  it("keeps system-only appends silent while waiting", async () => {
+    await start();
+    await change({ termination_status: "awaiting_user", message_count: 3 });
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it("sends only the waiting toast with both toggles on and consumes the reply", async () => {
+    await start(true);
+    await change({ termination_status: "awaiting_user", message_count: 3 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("The agent finished this turn and is waiting for you.");
+    await change({ message_count: 4 });
+    expect(messages).toHaveBeenCalledTimes(2);
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
   it("toasts a newly discovered waiting session", async () => {
     await start();
@@ -108,7 +123,6 @@ describe("desktop notification watcher", () => {
   });
   it.each([
     { relationship_type: "subagent" },
-    { is_automated: true },
     { ended_at: "2026-10-07T11:49:59Z" },
   ])("keeps excluded sessions silent: %j", async (patch) => {
     await start(true);
@@ -128,7 +142,7 @@ describe("desktop notification watcher", () => {
     await change({ termination_status: "awaiting_user" });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(sent ? 1 : 0);
   });
-  it("keeps its successful watermark across a failed fetch", async () => {
+  it("retries a failed fetch with the full freshness window", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await start();
     vi.setSystemTime(new Date("2026-10-07T12:00:05Z"));
@@ -137,8 +151,22 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).not.toHaveBeenCalled();
     vi.setSystemTime(new Date("2026-10-07T12:00:10Z"));
     await change();
-    expect(list.mock.calls[2]![0]?.active_since).toBe("2026-10-07T11:59:59.700Z");
+    expect(list.mock.calls[2]![0]?.active_since).toBe("2026-10-07T11:50:10.000Z");
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it("finds a reply timestamped before a successful fetch but committed later", async () => {
+    list.mockImplementation(async (params) => ({
+      sessions: Date.parse(row.ended_at!) >= Date.parse(params!.active_since!) ? [row] : [],
+      total: 1,
+    }));
+    await start(true);
+    vi.setSystemTime(new Date("2026-10-07T12:00:05Z"));
+    await change();
+    vi.setSystemTime(new Date("2026-10-07T12:00:10Z"));
+    await change({ message_count: 3, ended_at: "2026-10-07T12:00:01Z" });
+    expect(list.mock.calls[2]![0]?.active_since).toBe("2026-10-07T11:50:10.000Z");
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
   });
   it("reads all pages before completing the silent baseline", async () => {
     list.mockResolvedValueOnce({ sessions: [], total: 1, next_cursor: "page2" });
@@ -172,6 +200,37 @@ describe("desktop notification watcher", () => {
     messages.mockResolvedValue({ messages: [reply({ is_system: true }), reply()], count: 2 });
     await start(true);
     await change({ message_count: 3 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it.each([{ has_tool_use: true }, { role: "user" }])(
+    "finds assistant prose before a later message: %j",
+    async (patch) => {
+      messages.mockResolvedValue({ messages: [
+        reply({ ...patch, timestamp: "2026-10-07T12:00:03Z" }),
+        reply({ content: "Latest text", timestamp: "2026-10-07T12:00:02Z" }),
+        reply(),
+      ], count: 3 });
+      await start(true);
+      await change({ message_count: 5 });
+      expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+      expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Latest text");
+      messages.mockResolvedValue({ messages: [reply({ content: "Older text", timestamp: "2026-10-07T12:00:02Z" })], count: 1 });
+      await change({ message_count: 6 });
+      expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("retries a failed reply read without consuming the count or timestamp", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await start(true);
+    messages.mockRejectedValueOnce(new Error("unavailable"));
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    await change();
+    expect(messages).toHaveBeenCalledTimes(2);
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
+    await change();
+    expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
   it("delivers the waiting toast even when the reply read fails", async () => {

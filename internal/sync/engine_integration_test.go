@@ -18383,7 +18383,7 @@ func TestIncrementalSync_ClaudeEndTurnUpdatesTermination(t *testing.T) {
 	require.Len(t, before, 1)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
-	_, err = f.WriteString(`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n")
+	_, err = f.WriteString(testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n")
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 	env.engine.SyncPaths([]string{path})
@@ -18400,7 +18400,7 @@ func TestIncrementalSync_ClaudeEndTurnUpdatesTermination(t *testing.T) {
 }
 
 func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
-	const answer = `{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n"
+	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
 	const duration = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}` + "\n"
 	for _, tc := range []struct {
 		name  string

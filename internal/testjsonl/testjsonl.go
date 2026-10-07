@@ -88,13 +88,16 @@ func ClaudeToolResultUserJSON(
 
 // ClaudeAssistantJSON returns a Claude assistant message as a
 // JSON string.
-func ClaudeAssistantJSON(content any, timestamp string) string {
+func ClaudeAssistantJSON(content any, timestamp string, stopReason ...string) string {
 	m := map[string]any{
 		"type":      "assistant",
 		"timestamp": timestamp,
 		"message": map[string]any{
 			"content": content,
 		},
+	}
+	if len(stopReason) > 0 {
+		m["message"].(map[string]any)["stop_reason"] = stopReason[0]
 	}
 	return mustMarshal(m)
 }

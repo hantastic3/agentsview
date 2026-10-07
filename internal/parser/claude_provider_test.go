@@ -1041,11 +1041,11 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 		name, tail string
 		want       *TerminationStatus
 	}{
-		{name: "assistant end turn", tail: `{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n", want: new(TerminationAwaitingUser)},
+		{name: "assistant end turn", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n", want: new(TerminationAwaitingUser)},
 		{name: "tool result only", tail: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","content":"ok"}]}}` + "\n"},
 		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: nil},
-		{name: "incomplete tail", tail: `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"user"`, want: new(TerminationAwaitingUser)},
-		{name: "malformed complete line", tail: `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"user"` + "\n", want: new(TerminationAwaitingUser)},
+		{name: "incomplete tail", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"`, want: new(TerminationAwaitingUser)},
+		{name: "malformed complete line", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"` + "\n", want: new(TerminationAwaitingUser)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()

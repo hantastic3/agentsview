@@ -1286,6 +1286,7 @@ organized into sections:
 | Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
 | Tool-result images | Preview and remove images from stored tool results                                                       |
 | Terminal           | Default terminal emulator for session resume                                                             |
+| Notifications      | Desktop notifications when an agent waits for you, plus optional alerts for new assistant text replies    |
 | Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
 | GitHub             | Personal access token for Gist publishing                                                                |
 | Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
