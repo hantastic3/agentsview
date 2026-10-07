@@ -638,7 +638,11 @@ func buildSessionFilterWithBuilder(
 	if f.IncludeEmpty {
 		basePreds = basePreds[1:]
 	}
-	// Match each row independently of its parent's filters or relationship.
+	// Opaque project-key callers have already resolved every raw label that
+	// belongs to the identity. Match those labels on each row directly so
+	// child sessions are neither excluded nor pulled in merely because their
+	// parent belongs to the requested project. EachRow applies all filters
+	// independently of the parent for the same reason.
 	if f.ProjectLabels != nil || f.EachRow {
 		filterPreds, oneShotPred := sessionFilterPredicates(f, b, q)
 		allPreds := slices.Concat(basePreds, filterPreds)

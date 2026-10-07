@@ -90,7 +90,6 @@ type sessionFilterInput struct {
 	IncludeOneShot   bool              `query:"include_one_shot" doc:"Include one-shot sessions"`
 	IncludeAutomated bool              `query:"include_automated" doc:"Include automated sessions"`
 	IncludeChildren  bool              `query:"include_children" doc:"Include child sessions"`
-	EachRow          bool              `query:"each_row" doc:"Apply filters to each session row, children included, without grouping by root"`
 	IncludeSource    bool              `query:"include_source" doc:"Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index"`
 	Outcome          string            `query:"outcome" doc:"Filter by detected outcome"`
 	HealthGrade      string            `query:"health_grade" doc:"Filter by health grade"`
@@ -111,8 +110,9 @@ type SessionListFilters = sessionFilterInput
 // Batch selection belongs only to the session list, not sidebar discovery.
 type listSessionsInput struct {
 	SessionListFilters
-	IDs    string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
-	IDsSet bool
+	EachRow bool   `query:"each_row" doc:"Apply filters to each session row, children included, without grouping by root"`
+	IDs     string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
+	IDsSet  bool
 }
 
 func (in *listSessionsInput) Resolve(ctx huma.Context) []error {
@@ -211,7 +211,6 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		IncludeOneShot:   in.IncludeOneShot,
 		IncludeAutomated: in.IncludeAutomated,
 		IncludeChildren:  in.IncludeChildren,
-		EachRow:          in.EachRow,
 		IncludeSource:    in.IncludeSource,
 		Outcome:          in.Outcome,
 		HealthGrade:      in.HealthGrade,
@@ -279,6 +278,7 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		return nil, err
 	}
+	filter.EachRow = in.EachRow
 	if in.IDsSet {
 		filter.IDs, err = parseSessionIDs(in.IDs)
 		if err != nil {

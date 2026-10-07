@@ -1042,8 +1042,6 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 		want       *TerminationStatus
 	}{
 		{name: "assistant end turn", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n", want: new(TerminationAwaitingUser)},
-		{name: "tool result only", tail: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","content":"ok"}]}}` + "\n", want: new(TerminationClean)},
-		{name: "tool result interrupt", tail: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","content":"cancelled"},{"type":"text","text":"[Request interrupted by user]"}]}}` + "\n", want: new(TerminationClean)},
 		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: nil},
 		{name: "incomplete tail", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"`, want: new(TerminationAwaitingUser)},
 		{name: "malformed complete line", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"` + "\n", want: new(TerminationAwaitingUser)},
@@ -1065,11 +1063,6 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, IncrementalApplied, status)
 			assert.Equal(t, tc.want, outcome.TerminationStatus)
-			if tc.name == "tool result interrupt" {
-				require.Len(t, outcome.Messages, 1)
-				assert.True(t, outcome.Messages[0].IsSystem)
-				assert.Len(t, outcome.Messages[0].ToolResults, 1)
-			}
 		})
 	}
 }

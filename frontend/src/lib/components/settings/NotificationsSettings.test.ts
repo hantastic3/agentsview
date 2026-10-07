@@ -128,3 +128,11 @@ it("explains an unavailable notification bridge", () => {
   expect(getByRole("status").textContent).toBe("Desktop notifications are unavailable in this app.");
   expect(getByRole("switch", { name: "Enable desktop notifications" }).hasAttribute("disabled")).toBe(true);
 });
+
+it("shows OS notification settings guidance when desktop permission reports granted", async () => {
+  settings.notifications.enabled = true;
+  vi.stubGlobal("__TAURI__", { notification: { isPermissionGranted: vi.fn().mockResolvedValue(true) } });
+  const { getByText, queryByRole } = render(NotificationsSettings);
+  expect(getByText("Toasts follow the OS notification settings for agentsview.")).toBeTruthy();
+  expect(queryByRole("status")).toBeNull();
+});

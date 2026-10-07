@@ -2464,6 +2464,7 @@
   "settings_notifications_description": "Être notifié quand un agent termine son tour ou envoie une nouvelle réponse",
   "settings_notifications_keywords": "notifications bureau alerte réponse notifications",
   "settings_notifications_unavailable": "Les notifications de bureau sont indisponibles dans cette application.",
+  "settings_notifications_os_settings": "Les notifications suivent les paramètres de notification du système pour agentsview.",
   "settings_notifications_permission_denied": "Les notifications ont été refusées. Autorisez les notifications pour AgentsView dans les paramètres système.",
   "settings_notifications_enable": "Activer les notifications de bureau",
   "settings_notifications_turn_end_hint": "Uniquement dans l’application de bureau. Vous êtes averti quand un agent termine son tour et attend votre réponse.",

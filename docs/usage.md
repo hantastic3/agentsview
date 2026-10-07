@@ -1301,7 +1301,8 @@ you, including forks and continuations. The optional reply toggle shows the
 newest new assistant text reply while the agent is still working, once per
 refresh. History, restores, subagents, automated sessions, and the session in
 a focused window stay silent. Missed updates arrive within five minutes while
-the app runs. If the OS denies permission, the toggle stays off and shows how
+the app runs. Toasts follow the OS notification settings for agentsview.
+On platforms that report denied permission, the toggle stays off and shows how
 to allow notifications. Apps without the notification bridge show unavailable.
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)

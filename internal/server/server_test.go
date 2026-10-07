@@ -625,6 +625,32 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 	assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
 }
 
+func TestOpenAPIEachRowOnlyOnSessionList(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code)
+	var spec struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name string `json:"name"`
+				In   string `json:"in"`
+			} `json:"parameters"`
+		} `json:"paths"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	var routes []string
+	for path, methods := range spec.Paths {
+		for method, operation := range methods {
+			for _, parameter := range operation.Parameters {
+				if parameter.Name == "each_row" && parameter.In == "query" {
+					routes = append(routes, method+" "+path)
+				}
+			}
+		}
+	}
+	assert.Equal(t, []string{"get /api/v1/sessions"}, routes)
+}
+
 func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
 	te := setup(t)
 

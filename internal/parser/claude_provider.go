@@ -409,7 +409,7 @@ func (p *claudeProvider) ParseIncremental(
 	}
 	var termination *TerminationStatus
 	for _, msg := range newMsgs {
-		if (msg.Role == RoleAssistant && !msg.IsSystem) || len(msg.ToolResults) > 0 {
+		if msg.Role == RoleAssistant && !msg.IsSystem {
 			status := Classify(newMsgs, lastAssistantStopReason(newMsgs), false)
 			termination = &status
 			break

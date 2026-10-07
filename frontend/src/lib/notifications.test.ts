@@ -44,6 +44,8 @@ async function change(patch: Partial<DbSession> = {}) {
 }
 function reply(patch: Partial<DbMessage> = {}) {
   return {
+    id: 1,
+    ordinal: 2,
     role: "assistant",
     content: "Ready for review",
     timestamp: "2026-10-07T12:00:01Z",
@@ -69,7 +71,7 @@ beforeEach(() => {
     user_message_count: 1,
   } as DbSession;
   list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
-  messages.mockResolvedValue({ messages: [reply()], count: 1 });
+  messages.mockImplementation(async () => ({ messages: [reply({ ordinal: row.message_count - 1 })], count: 1 }));
 });
 afterEach(() => {
   stop?.();
@@ -105,6 +107,7 @@ describe("desktop notification watcher", () => {
   it("keeps system-only appends silent while waiting", async () => {
     await start();
     await change({ termination_status: "awaiting_user", message_count: 3 });
+    messages.mockResolvedValue({ messages: [reply({ ordinal: 3, is_system: true })], count: 1 });
     await change({ message_count: 4 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
@@ -113,8 +116,9 @@ describe("desktop notification watcher", () => {
     await change({ termination_status: "awaiting_user", message_count: 3 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("The agent finished this turn and is waiting for you.");
+    messages.mockResolvedValue({ messages: [reply({ ordinal: 3, is_system: true })], count: 1 });
     await change({ message_count: 4 });
-    expect(messages).not.toHaveBeenCalled();
+    expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
   it("toasts a newly discovered waiting session", async () => {
@@ -183,11 +187,11 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
     await change();
-    messages.mockResolvedValue({ messages: [reply({ content: "Another reply" })], count: 1 });
+    messages.mockResolvedValue({ messages: [reply({ ordinal: 3, content: "Another reply" })], count: 1 });
     await change({ message_count: 4 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
   });
-  it.each([{ has_tool_use: true }, { role: "user" }, { content: "  " }])(
+  it.each([{ has_tool_use: true, content: "[Bash] ls" }, { role: "user" }, { content: "  " }])(
     "ignores a latest message without assistant prose: %j",
     async (patch) => {
       messages.mockResolvedValue({ messages: [reply(patch)], count: 1 });
@@ -197,17 +201,17 @@ describe("desktop notification watcher", () => {
     },
   );
   it("skips system rows when finding the newest reply", async () => {
-    messages.mockResolvedValue({ messages: [reply({ is_system: true }), reply()], count: 2 });
+    messages.mockResolvedValue({ messages: [reply({ ordinal: 3, is_system: true }), reply()], count: 2 });
     await start(true);
     await change({ message_count: 4 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
-  it.each([{ has_tool_use: true }, { role: "user" }])(
+  it.each([{ has_tool_use: true, content: "[Bash] ls" }, { role: "user" }])(
     "finds assistant prose before a later message: %j",
     async (patch) => {
       messages.mockResolvedValue({ messages: [
-        reply({ ...patch, timestamp: "2026-10-07T12:00:03Z" }),
-        reply({ content: "Latest text", timestamp: "2026-10-07T12:00:02Z" }),
+        reply({ ordinal: 4, ...patch, timestamp: "2026-10-07T12:00:03Z" }),
+        reply({ ordinal: 3, content: "Latest text", timestamp: "2026-10-07T12:00:02Z" }),
         reply(),
       ], count: 3 });
       await start(true);
@@ -222,8 +226,8 @@ describe("desktop notification watcher", () => {
     messages.mockRejectedValueOnce(new Error("unavailable"));
     await change({ message_count: 3 });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change({ message_count: 4 });
-    expect(messages).toHaveBeenLastCalledWith({ id: "session" }, { direction: "desc", limit: 2 });
+    await change();
+    expect(messages).toHaveBeenLastCalledWith({ id: "session" }, { direction: "desc", limit: 1 });
     expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
     expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
@@ -231,22 +235,51 @@ describe("desktop notification watcher", () => {
     expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
   });
-  it("never reads replies for waiting rows, including after a failed read", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    await start(true);
-    messages.mockRejectedValueOnce(new Error("unavailable"));
-    await change({ message_count: 3 });
-    await change({ termination_status: "awaiting_user", message_count: 4 });
-    await change();
-    expect(messages).toHaveBeenCalledOnce();
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
-  });
-  it("keeps restored rows silent and reads nothing for unseen rows", async () => {
+  it("keeps restored rows silent and reads the first reply of a newly seen session", async () => {
     await start(true);
     await change({ id: "restored", termination_status: "awaiting_user", ended_at: "2026-10-07T11:59:00Z" });
-    await change({ id: "new-running", termination_status: "", message_count: 8 });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
     expect(messages).not.toHaveBeenCalled();
+    messages.mockResolvedValue({ messages: [reply({ ordinal: 1 }), reply({ ordinal: 0, role: "user" })], count: 2 });
+    await change({ id: "new-running", termination_status: "", message_count: 2, ended_at: "2026-10-07T12:00:01Z" });
+    expect(messages).toHaveBeenCalledWith({ id: "new-running" }, { direction: "desc", limit: 2 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("toasts a second turn end after a system-only append", async () => {
+    row.termination_status = "awaiting_user";
+    await start();
+    messages.mockResolvedValueOnce({ messages: [reply({ is_system: true })], count: 1 });
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("toasts prose beside a tool call", async () => {
+    await start(true);
+    messages.mockResolvedValue({ messages: [reply({ has_tool_use: true, content: "Ready for review\n\n[Bash] ls" })], count: 1 });
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("toasts once when a reply appends between the list and message read", async () => {
+    await start(true);
+    messages.mockResolvedValue({ messages: [reply({ ordinal: 3, content: "Appended reply" })], count: 1 });
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Appended reply");
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("remembers a waiting session that re-enters after ten idle minutes", async () => {
+    await start();
+    await change({ termination_status: "awaiting_user" });
+    list.mockResolvedValueOnce({ sessions: [], total: 0 });
+    vi.setSystemTime(new Date("2026-10-07T12:11:00Z"));
+    await change();
+    await change({ ended_at: "2026-10-07T12:11:01Z" });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("recovers missed events within five minutes and clears the poll on stop", async () => {
     await start();
@@ -258,10 +291,34 @@ describe("desktop notification watcher", () => {
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(list).toHaveBeenCalledTimes(2);
   });
-  it("caps a burst reply read at fifty rows", async () => {
+  it("reads a burst beyond fifty rows", async () => {
     await start(true);
+    const tools = Array.from({ length: 97 }, (_, index) => reply({ id: index + 10, ordinal: 99 - index, has_tool_use: true, content: "[Bash] ls" }));
+    messages.mockResolvedValue({ messages: [...tools, reply()], count: 98 });
     await change({ message_count: 100 });
-    expect(messages).toHaveBeenCalledWith({ id: "session" }, { direction: "desc", limit: 50 });
+    expect(messages).toHaveBeenCalledWith({ id: "session" }, { direction: "desc", limit: 98 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
+  });
+  it("pages through a capped read to find prose behind a tool burst", async () => {
+    await start(true);
+    const tools = Array.from({ length: 1000 }, (_, index) => reply({ id: index + 10, ordinal: 1002 - index, has_tool_use: true, content: "[Bash] ls" }));
+    messages.mockResolvedValueOnce({ messages: tools, count: 1000 });
+    messages.mockResolvedValueOnce({ messages: [reply()], count: 1 });
+    await change({ message_count: 1003 });
+    expect(messages).toHaveBeenNthCalledWith(1, { id: "session" }, { direction: "desc", limit: 1001 });
+    expect(messages).toHaveBeenNthCalledWith(2, { id: "session" }, { direction: "desc", limit: 1, from: 2 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
+  });
+  it("retries a failed waiting read and toasts once", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await start();
+    messages.mockRejectedValueOnce(new Error("unavailable"));
+    await change({ message_count: 3, termination_status: "awaiting_user" });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    await change();
+    await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("does no reads or delivery when permission is denied", async () => {

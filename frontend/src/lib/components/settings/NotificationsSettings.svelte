@@ -47,6 +47,9 @@
   {m.settings_notifications_enable()}
 </Toggle>
 <p>{m.settings_notifications_turn_end_hint()}</p>
+{#if available}
+  <p>{m.settings_notifications_os_settings()}</p>
+{/if}
 {#if !available}
   <p role="status">{m.settings_notifications_unavailable()}</p>
 {:else if denied}

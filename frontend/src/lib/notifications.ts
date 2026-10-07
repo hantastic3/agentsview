@@ -1,5 +1,6 @@
-import { SessionsService, type DbSession } from "./api/generated/index.js";
+import { SessionsService, type DbMessage, type DbSession } from "./api/generated/index.js";
 import { m } from "./i18n/index.js";
+import { isToolOnly } from "./utils/content-parser.js";
 import { events } from "./stores/events.svelte.js";
 
 type NotificationBridge = {
@@ -36,7 +37,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 const FRESHNESS_MS = 10 * 60_000;
-const DEBOUNCE_MS = 300;
+const RETENTION_MS = 24 * 60 * 60_000;
 const SAFETY_NET_REFRESH_MS = 5 * 60_000;
 
 export function startNotificationWatcher(
@@ -50,6 +51,7 @@ export function startNotificationWatcher(
       user_message_count: number;
       message_count: number;
       activity: number;
+      reply_ordinal: number;
     }
   >();
   const startedAt = Date.now();
@@ -70,6 +72,23 @@ export function startNotificationWatcher(
           : m.notification_new_reply_title_suffix({ name }),
       body,
     });
+  }
+
+  async function newMessages(row: DbSession, count: number): Promise<DbMessage[]> {
+    const delta = row.message_count - count;
+    const messages: DbMessage[] = [];
+    let from: number | undefined;
+    while (messages.length < delta && !stopped) {
+      const result = await SessionsService.getApiV1SessionsByIdMessages(
+        { id: row.id },
+        { direction: "desc", limit: delta - messages.length, ...(from === undefined ? {} : { from }) },
+      );
+      messages.push(...result.messages);
+      const last = result.messages.at(-1);
+      if (!last || last.ordinal <= count) break;
+      from = last.ordinal - 1;
+    }
+    return messages.filter((message) => message.ordinal >= count);
   }
 
   async function refresh() {
@@ -100,46 +119,48 @@ export function startNotificationWatcher(
         const silent =
           row.relationship_type === "subagent" ||
           (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus());
-        const turnEnd =
-          !silent &&
-          row.termination_status === "awaiting_user" &&
-          (previous
-            ? previous.status !== "awaiting_user" || previous.user_message_count !== row.user_message_count
-            : activity > startedAt);
-        if (turnEnd) {
-          send(row, "turn_end", m.notification_turn_end_body());
-        }
+        const fresh = !!previous || activity > startedAt;
+        const count = previous?.message_count ?? (fresh ? 0 : row.message_count);
         const entry = {
           status: row.termination_status,
           user_message_count: row.user_message_count,
           message_count: row.message_count,
           activity,
+          reply_ordinal: previous?.reply_ordinal ?? -1,
         };
-        seen.set(row.id, entry);
-        if (!silent && previous && row.termination_status !== "awaiting_user" && row.message_count > previous.message_count && repliesEnabled()) {
+        let messages: DbMessage[] = [];
+        if (!silent && fresh && row.message_count > count) {
           try {
-            const result = await SessionsService.getApiV1SessionsByIdMessages(
-              { id: row.id },
-              { direction: "desc", limit: Math.min(row.message_count - previous.message_count, 50) },
-            );
-            const latest = result.messages.find(
-              (message) =>
-                !message.is_system &&
-                message.role === "assistant" &&
-                !message.has_tool_use &&
-                message.content.trim(),
-            );
-            if (latest) {
-              send(row, "new_reply", latest.content.slice(0, 200));
-            }
+            messages = await newMessages(row, count);
           } catch (err) {
-            entry.message_count = previous.message_count;
+            entry.message_count = count;
+            entry.status = previous?.status;
+            entry.user_message_count = previous?.user_message_count ?? 0;
+            seen.set(row.id, entry);
             console.warn("notification reply read failed", err);
+            continue;
           }
         }
+        const assistants = messages.filter((message) => !message.is_system && message.role === "assistant");
+        const turnEnd =
+          !silent &&
+          row.termination_status === "awaiting_user" &&
+          (previous
+            ? previous.status !== "awaiting_user" || previous.user_message_count !== row.user_message_count || assistants.length > 0
+            : activity > startedAt);
+        if (turnEnd) {
+          send(row, "turn_end", m.notification_turn_end_body());
+        } else if (!silent && row.termination_status !== "awaiting_user" && repliesEnabled()) {
+          const latest = assistants.find((message) => message.ordinal > entry.reply_ordinal && message.content.trim() && !isToolOnly(message));
+          if (latest) {
+            send(row, "new_reply", latest.content.slice(0, 200));
+            entry.reply_ordinal = latest.ordinal;
+          }
+        }
+        seen.set(row.id, entry);
       }
       for (const [id, entry] of seen) {
-        if (entry.activity < fetchedAt - FRESHNESS_MS) seen.delete(id);
+        if (entry.activity < fetchedAt - RETENTION_MS) seen.delete(id);
       }
     } catch (err) {
       console.warn("notification session read failed", err);
@@ -152,7 +173,7 @@ export function startNotificationWatcher(
     }
   }
 
-  const unsubscribe = events.subscribeDebounced(() => void refresh(), DEBOUNCE_MS);
+  const unsubscribe = events.subscribeDebounced(() => void refresh());
   const interval = setInterval(() => void refresh(), SAFETY_NET_REFRESH_MS);
   void refresh();
   return () => {
