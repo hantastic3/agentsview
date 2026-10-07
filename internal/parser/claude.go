@@ -783,6 +783,7 @@ type claudeStoredIdentity struct {
 // claudeIncrementalScan carries the per-session stored state an
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
+	fileTruncated *bool
 	startOrdinal  int
 	lastEntryUUID string
 	stored        claudeStoredIdentity
@@ -835,7 +836,7 @@ func claudeParseSessionFrom(
 		appendedCustomTitle    string
 	)
 
-	consumed, err := readJSONLFrom(
+	consumed, err := readJSONLFromWithTruncation(
 		path, offset, func(line string) {
 			line = resolveClaudePersistedToolResults(path, line)
 			if ts := extractTimestamp(line); !ts.IsZero() {
@@ -921,7 +922,7 @@ func claudeParseSessionFrom(
 				timestamp:  ts,
 			})
 			lineIndex++
-		},
+		}, scan.fileTruncated,
 	)
 	if err != nil {
 		return nil, nil, time.Time{}, 0, fmt.Errorf(

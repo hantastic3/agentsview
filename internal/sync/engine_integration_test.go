@@ -18398,3 +18398,38 @@ func TestIncrementalSync_ClaudeEndTurnUpdatesTermination(t *testing.T) {
 	assert.Equal(t, before[0].ID, after[0].ID)
 	assert.Equal(t, "done", after[1].Content)
 }
+
+func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
+	const answer = `{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n"
+	const duration = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}` + "\n"
+	for _, tc := range []struct {
+		name  string
+		tails []string
+		want  []string
+	}{
+		{"separate duration", []string{answer, duration}, []string{"awaiting_user", "awaiting_user"}},
+		{"same tail duration", []string{answer + duration}, []string{"awaiting_user"}},
+		{"incomplete final line", []string{answer + `{"type":"user"`}, []string{"truncated"}},
+		{"user follows answer", []string{answer, testjsonl.ClaudeUserJSON("follow up", tsEarlyS5) + "\n"}, []string{"awaiting_user", "clean"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)))
+			env.engine.SyncAll(t.Context(), nil)
+			for i, tail := range tc.tails {
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+				require.NoError(t, err)
+				_, err = f.WriteString(tail)
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				env.engine.SyncPaths([]string{path})
+				session, err := env.db.GetSessionFull(t.Context(), "notify")
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				require.NotNil(t, session.TerminationStatus)
+				assert.Equal(t, tc.want[i], *session.TerminationStatus)
+				assert.True(t, session.LastWriteIncremental)
+			}
+		})
+	}
+}

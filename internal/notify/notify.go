@@ -3,7 +3,6 @@ package notify
 import (
 	"context"
 	"log"
-	"math"
 	"sync"
 	"time"
 
@@ -22,12 +21,17 @@ type Notification struct {
 }
 
 type sessionState struct {
-	turnCount, replyCount int
-	lastReply, endedAt    time.Time
+	turnEnd, replyEnd  time.Time
+	lastReply, endedAt time.Time
+}
+
+type sessionStore interface {
+	GetSession(context.Context, string) (*db.Session, error)
+	GetLatestNonSystemMessage(context.Context, string) (*db.Message, error)
 }
 
 type Hub struct {
-	store   *db.DB
+	store   sessionStore
 	cfg     func() config.NotificationsConfig
 	publish func(Notification)
 	now     func() time.Time
@@ -39,7 +43,7 @@ type Hub struct {
 	retries map[string]time.Time
 }
 
-func New(store *db.DB, cfg func() config.NotificationsConfig, publish func(Notification)) *Hub {
+func New(store sessionStore, cfg func() config.NotificationsConfig, publish func(Notification)) *Hub {
 	return &Hub{
 		store: store, cfg: cfg, publish: publish, now: time.Now,
 		since: time.Now(), pending: make(map[string]bool), wake: make(chan struct{}, 1),
@@ -105,7 +109,7 @@ func (h *Hub) process(ctx context.Context) time.Time {
 		return time.Time{}
 	}
 	for id, due := range h.retries {
-		if !due.After(now) || !cfg.NotifyNewReply {
+		if !due.After(now) {
 			ids[id] = true
 		}
 	}
@@ -113,41 +117,33 @@ func (h *Hub) process(ctx context.Context) time.Time {
 		delete(h.retries, id)
 		session, err := h.store.GetSession(ctx, id)
 		if err != nil {
+			h.retries[id] = now.Add(time.Second)
 			if ctx.Err() == nil {
 				log.Printf("notification session read: %v", err)
 			}
 			continue
 		}
-		if session == nil || session.ParentSessionID != nil || len(session.ParentSessionIDs) > 0 || session.IsAutomated || session.EndedAt == nil {
+		if session == nil || session.RelationshipType == "subagent" || session.IsAutomated || session.EndedAt == nil {
 			continue
 		}
 		endedAt, err := time.Parse(time.RFC3339Nano, *session.EndedAt)
 		if err != nil || !endedAt.After(h.since) || now.Sub(endedAt) > 10*time.Minute {
 			continue
 		}
-		state, exists := h.seen[id]
-		if !exists {
-			state.turnCount, state.replyCount = -1, -1
-		}
+		state := h.seen[id]
 		state.endedAt = endedAt
-		turnEnd := session.TerminationStatus != nil && *session.TerminationStatus == "awaiting_user" && session.MessageCount != state.turnCount
-		if !turnEnd && (!cfg.NotifyNewReply || session.MessageCount == state.replyCount || session.MessageCount == state.turnCount) {
+		turnEnd := session.TerminationStatus != nil && *session.TerminationStatus == "awaiting_user" && !endedAt.Equal(state.turnEnd)
+		if !turnEnd && (!cfg.NotifyNewReply || endedAt.Equal(state.replyEnd) || endedAt.Equal(state.turnEnd)) {
 			h.seen[id] = state
 			continue
 		}
-		messages, err := h.store.GetMessages(ctx, id, math.MaxInt, 8, false)
+		latest, err := h.store.GetLatestNonSystemMessage(ctx, id)
 		if err != nil {
+			h.retries[id] = now.Add(time.Second)
 			if ctx.Err() == nil {
 				log.Printf("notification message read: %v", err)
 			}
 			continue
-		}
-		var latest *db.Message
-		for i := range messages {
-			if !messages[i].IsSystem {
-				latest = &messages[i]
-				break
-			}
 		}
 		n := Notification{Kind: "turn_end", SessionID: id, Project: session.Project, Agent: session.Agent}
 		if session.DisplayName != nil {
@@ -157,7 +153,7 @@ func (h *Hub) process(ctx context.Context) time.Time {
 			n.Excerpt = stringutil.TruncateRunes(latest.Content, 160, "…")
 		}
 		if turnEnd {
-			state.turnCount = session.MessageCount
+			state.turnEnd = endedAt
 		} else if latest == nil || latest.Role != "assistant" {
 			h.seen[id] = state
 			continue
@@ -167,7 +163,7 @@ func (h *Hub) process(ctx context.Context) time.Time {
 			continue
 		} else {
 			n.Kind = "new_reply"
-			state.replyCount, state.lastReply = session.MessageCount, now
+			state.replyEnd, state.lastReply = endedAt, now
 		}
 		h.seen[id] = state
 		h.publish(n)

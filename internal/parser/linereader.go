@@ -216,6 +216,12 @@ func (lr *lineReader) readLineBytes() ([]byte, error) {
 func readJSONLFrom(
 	path string, offset int64, fn func(line string),
 ) (consumed int64, err error) {
+	return readJSONLFromWithTruncation(path, offset, fn, nil)
+}
+
+func readJSONLFromWithTruncation(
+	path string, offset int64, fn func(line string), truncated *bool,
+) (consumed int64, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, fmt.Errorf("open %s: %w", path, err)
@@ -230,17 +236,22 @@ func readJSONLFrom(
 
 	lr := newLineReader(f, maxLineSize)
 	defer releaseLineReader(lr)
+	lastLineValid := true
 	for {
 		line, ok := lr.next()
 		if !ok {
 			break
 		}
-		if gjson.Valid(line) {
+		lastLineValid = gjson.Valid(line)
+		if lastLineValid {
 			fn(line)
 			// Track offset through last valid JSON line
 			// so partial lines at EOF are not skipped.
 			consumed = lr.bytesRead
 		}
+	}
+	if truncated != nil {
+		*truncated = !lastLineValid
 	}
 	return consumed, lr.Err()
 }

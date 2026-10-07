@@ -339,3 +339,21 @@ func TestBroadcasterPublishPreservesPendingRefresh(t *testing.T) {
 		assert.Equal(t, "sessions", (<-ch).Scope)
 	})
 }
+
+func TestBroadcasterNotificationBurst(t *testing.T) {
+	b := NewBroadcaster(time.Minute)
+	ch, unsub := b.Subscribe()
+	defer unsub()
+	for i := 0; i < 128; i++ {
+		b.Publish("notification", i)
+	}
+	for i := 0; i < 128; i++ {
+		select {
+		case ev := <-ch:
+			assert.Equal(t, "notification", ev.Name)
+			assert.Equal(t, i, ev.Payload)
+		default:
+			t.Fatal("notification burst lost an event")
+		}
+	}
+}

@@ -365,10 +365,12 @@ func (p *claudeProvider) ParseIncremental(
 		return IncrementalOutcome{ForceReplace: true},
 			IncrementalNeedsFullParse, nil
 	}
+	var truncated bool
 	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
 		path,
 		req.Offset,
 		claudeIncrementalScan{
+			fileTruncated: &truncated,
 			startOrdinal:  req.StartOrdinal,
 			lastEntryUUID: req.LastEntryUUID,
 			stored: claudeStoredIdentity{
@@ -393,7 +395,7 @@ func (p *claudeProvider) ParseIncremental(
 		}
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
-	if len(newMsgs) == 0 {
+	if len(newMsgs) == 0 && !truncated {
 		if consumed > 0 {
 			return IncrementalOutcome{
 				SessionID:     req.SessionID,
@@ -407,17 +409,10 @@ func (p *claudeProvider) ParseIncremental(
 	if req.StoredUserMessageCount == 0 && req.StoredSessionKind == "" && req.StoredEntrypoint == "sdk-cli" && slices.ContainsFunc(newMsgs, isRealClaudeUserMessage) {
 		return IncrementalOutcome{ForceReplace: true}, IncrementalNeedsFullParse, nil
 	}
-	var termination *TerminationStatus
-	for _, msg := range newMsgs {
-		if msg.Role == RoleAssistant && !msg.IsSystem {
-			status := Classify(newMsgs, lastAssistantStopReason(newMsgs), false)
-			termination = &status
-			break
-		}
-	}
+	termination := Classify(newMsgs, lastAssistantStopReason(newMsgs), truncated)
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx := claudeProviderTokenTotals(newMsgs)
 	return IncrementalOutcome{
-		TerminationStatus:    termination,
+		TerminationStatus:    &termination,
 		SessionID:            req.SessionID,
 		Messages:             newMsgs,
 		SubagentLinks:        links,

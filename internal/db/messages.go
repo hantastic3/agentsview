@@ -588,6 +588,23 @@ func (db *DB) GetMessages(
 	return msgs, nil
 }
 
+// GetLatestNonSystemMessage returns the newest conversation message, ignoring system rows.
+func (db *DB) GetLatestNonSystemMessage(ctx context.Context, sessionID string) (*Message, error) {
+	rows, err := db.getReader().QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s FROM messages
+		WHERE session_id = ? AND is_system = 0
+		ORDER BY ordinal DESC LIMIT 1`, selectMessageCols), sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("querying latest conversation message: %w", err)
+	}
+	defer rows.Close()
+	msgs, err := scanMessages(rows)
+	if err != nil || len(msgs) == 0 {
+		return nil, err
+	}
+	return &msgs[0], nil
+}
+
 // MessageWindow parameterises GetMessagesWindow. Exactly one retrieval
 // mode: Around non-nil = symmetric window; otherwise linear from/limit.
 type MessageWindow struct {

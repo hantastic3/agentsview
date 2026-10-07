@@ -8,7 +8,7 @@ import (
 // broadcasterBufferCap is the per-subscriber buffer size. A slow
 // client can fall this many events behind before the broadcaster
 // starts dropping events on its channel.
-const broadcasterBufferCap = 8
+const broadcasterBufferCap = 256
 
 // Event carries a named payload or an advisory refresh scope.
 type Event struct {
@@ -56,6 +56,13 @@ func NewBroadcaster(minInterval time.Duration) *Broadcaster {
 	}
 }
 
+// Publish delivers named events without coalescing refresh signals.
+func (b *Broadcaster) Publish(name string, payload any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.broadcastLocked(Event{Name: name, Payload: payload})
+}
+
 // Emit delivers scope to every subscriber, subject to rate limiting.
 // The first emit after a quiet gap of at least minInterval fans out
 // immediately; emits within the window update the pending scope and
@@ -64,13 +71,6 @@ func NewBroadcaster(minInterval time.Duration) *Broadcaster {
 // Delivery is non-blocking: if a subscriber's buffer is full, the
 // event is dropped for that subscriber. The engine never blocks on
 // slow clients.
-// Publish delivers named events without coalescing refresh signals.
-func (b *Broadcaster) Publish(name string, payload any) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.broadcastLocked(Event{Name: name, Payload: payload})
-}
-
 func (b *Broadcaster) Emit(scope string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
