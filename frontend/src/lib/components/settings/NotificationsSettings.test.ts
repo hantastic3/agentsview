@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import NotificationsSettings from "./NotificationsSettings.svelte";
 import { SettingsService, type SettingsResponse } from "../../api/generated/index";
@@ -47,14 +47,18 @@ it("saves each notification toggle and renders the saved value", async () => {
     notifications: { enabled: true, notify_new_reply: false },
   });
   const { getByRole } = render(NotificationsSettings);
-  const enabled = getByRole("switch", { name: "Enable desktop notifications" });
+  const enabled = () => getByRole("switch", { name: "Enable desktop notifications" });
   const replies = getByRole("switch", { name: "Also notify on new replies" });
   expect(replies.hasAttribute("disabled")).toBe(true);
   expect(plugin.requestPermission).not.toHaveBeenCalled();
-  await fireEvent.click(enabled);
+  await fireEvent.click(enabled());
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith({
+      notifications: { enabled: true, notify_new_reply: false },
+    }),
+  );
   expect(plugin.requestPermission).toHaveBeenCalledOnce();
-  expect(save).toHaveBeenCalledWith({ notifications: { enabled: true, notify_new_reply: false } });
-  expect((enabled as HTMLInputElement).checked).toBe(true);
+  expect((enabled() as HTMLInputElement).checked).toBe(true);
   save.mockResolvedValue({ ...response, notifications: { enabled: true, notify_new_reply: true } });
   await fireEvent.click(replies);
   expect(save).toHaveBeenLastCalledWith({
@@ -65,10 +69,45 @@ it("saves each notification toggle and renders the saved value", async () => {
     ...response,
     notifications: { enabled: false, notify_new_reply: true },
   });
-  await fireEvent.click(enabled);
+  await fireEvent.click(enabled());
   expect(save).toHaveBeenLastCalledWith({
     notifications: { enabled: false, notify_new_reply: true },
   });
   expect(plugin.requestPermission).toHaveBeenCalledOnce();
   expect(plugin.sendNotification).not.toHaveBeenCalled();
+});
+
+it("keeps notifications off and explains denied permission", async () => {
+  vi.stubGlobal("__TAURI__", {
+    notification: {
+      isPermissionGranted: vi.fn().mockResolvedValue(false),
+      requestPermission: vi.fn().mockResolvedValue("denied"),
+    },
+  });
+  const { getByRole } = render(NotificationsSettings);
+  const enabled = () => getByRole("switch", { name: "Enable desktop notifications" });
+  await fireEvent.click(enabled());
+  await waitFor(() =>
+    expect(getByRole("status").textContent).toBe(
+      "Notification permission was denied. Allow notifications for AgentsView in your system settings.",
+    ),
+  );
+  expect(SettingsService.putApiV1Settings).not.toHaveBeenCalled();
+  expect(settings.notifications.enabled).toBe(false);
+  expect((enabled() as HTMLInputElement).checked).toBe(false);
+});
+
+it("explains denied permission when enabled settings load", async () => {
+  settings.notifications.enabled = true;
+  vi.stubGlobal("__TAURI__", {
+    notification: {
+      isPermissionGranted: vi.fn().mockResolvedValue(false),
+      requestPermission: vi.fn(),
+    },
+  });
+  const { getByRole } = render(NotificationsSettings);
+  await waitFor(() =>
+    expect(getByRole("status").textContent).toContain("Notification permission was denied."),
+  );
+  expect(SettingsService.putApiV1Settings).not.toHaveBeenCalled();
 });

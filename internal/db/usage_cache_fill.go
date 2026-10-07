@@ -1349,27 +1349,7 @@ func (m *usageCacheManager) NotifyCursorUsage() {
 	}
 }
 
-// SetSessionWriteObserver installs a non-blocking observer called after committed writes.
-func (db *DB) SetSessionWriteObserver(observer func([]string)) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.sessionWriteObserver = observer
-}
-
-// NotifySessionWrites delivers worker-written IDs after archive access is restored.
-func (db *DB) NotifySessionWrites(ids []string) {
-	db.mu.Lock()
-	observer := db.sessionWriteObserver
-	db.mu.Unlock()
-	if observer != nil && len(ids) > 0 {
-		observer(ids)
-	}
-}
-
 func (db *DB) notifyUsageSessions(sessionIDs []string) {
-	if db.sessionWriteObserver != nil && len(sessionIDs) > 0 {
-		db.sessionWriteObserver(sessionIDs)
-	}
 	if db.usageCache != nil && len(sessionIDs) > 0 {
 		db.usageCache.NotifySessions(sessionIDs)
 	}

@@ -221,51 +221,6 @@ func TestRunWorkerWritePassReloadsSkipCacheBeforeReleasingLock(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRunWorkerWritePassDeliversWrittenSessions(t *testing.T) {
-	for _, tc := range []struct {
-		name, mode string
-		workerErr  error
-	}{
-		{name: "audit", mode: "audit"},
-		{name: "foreground sync", mode: "sync"},
-		{name: "failed worker with committed writes", mode: "audit", workerErr: errors.New("worker failed after writes")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := testConfigWithClaudeFixture(t)
-			database, lock := openTestWriteDB(t, cfg)
-			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{})
-			defer engine.Close()
-			var observed []string
-			database.SetSessionWriteObserver(func(ids []string) {
-				assert.NoError(t, writeOneSession(t.Context(), database), "writer restored before catch-up")
-				observed = append(observed, ids...)
-			})
-			want := []string{"recent", "old", "started-only"}
-			restore := stubLaunchSyncWorker(t, func(
-				_ context.Context, workerCfg config.Config, request syncWorkerRequest, _ func(workerLine),
-			) (workerResult, error) {
-				assert.Equal(t, tc.mode, request.Mode)
-				workerDB, err := db.Open(t.Context(), workerCfg.DBPath)
-				require.NoError(t, err)
-				defer workerDB.Close()
-				for _, id := range want {
-					require.NoError(t, workerDB.UpsertSession(t.Context(), db.Session{ID: id, Project: "demo", Agent: "claude"}))
-				}
-				assert.Empty(t, observed, "worker writes bypass the daemon's observer")
-				return workerResult{Status: "ok", DiscoveryComplete: true, WrittenSessions: want}, tc.workerErr
-			})
-			defer restore()
-			_, err := runWorkerWritePass(t.Context(), t.Context(), cfg, engine, database, lock, tc.mode, nil)
-			if tc.workerErr != nil {
-				require.ErrorIs(t, err, tc.workerErr)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.ElementsMatch(t, want, observed, "only worker-written IDs reach the observer")
-		})
-	}
-}
-
 // TestRunWorkerWritePassKeepsSkipCacheOnSpawnFailure pins the reload gate: when
 // no worker ever ran, the archive was not touched, so the daemon's in-memory
 // skip state (which may be ahead of the last persisted snapshot) must be kept

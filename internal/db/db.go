@@ -779,7 +779,6 @@ type DB struct {
 	path                 string
 	writer               atomic.Pointer[sql.DB]
 	reader               atomic.Pointer[sql.DB]
-	sessionWriteObserver func([]string)
 	usageCache           *usageCacheManager
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc

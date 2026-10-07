@@ -5929,27 +5929,3 @@ func TestSettingsNotificationsRoundTrip(t *testing.T) {
 		assert.Equal(t, expected, actual)
 	}
 }
-
-func TestEventsStreamsNotification(t *testing.T) {
-	te := setup(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	w := newFlushRecorder()
-	done := make(chan struct{})
-	go func() {
-		te.handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
-		close(done)
-	}()
-	defer func() { cancel(); <-done }()
-	te.emitUntilSSEEvent(t, w, "messages", "data_changed", 3*time.Second)
-	te.broadcaster.Publish("notification", map[string]string{"kind": "turn_end", "session_id": "session"})
-	for !strings.Contains(w.BodyString(), "event: notification") {
-		select {
-		case <-w.writes:
-		case <-ctx.Done():
-			require.FailNow(t, "notification frame missing")
-		}
-	}
-	assert.Contains(t, w.BodyString(), `"kind":"turn_end"`)
-	assert.Contains(t, w.BodyString(), `"session_id":"session"`)
-}

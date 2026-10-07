@@ -6,15 +6,12 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/notify"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -24,9 +21,6 @@ import (
 // (the daemon is knowingly yielding); the write-owner flock remains the real
 // guard.
 const syncWorkerChildEnvVar = "AGENTSVIEW_SYNC_WORKER"
-
-// Reserve most of the frame for stats and other result fields.
-const workerWrittenSessionsMax = workerLineMaxBytes / 4096
 
 // runningAsSyncWorker reports whether this process is a sync-worker child
 // spawned by a daemon that has yielded write ownership for the pass.
@@ -62,8 +56,7 @@ type workerResult struct {
 	Stats *sync.SyncStats `json:"stats,omitempty"`
 	// LinkStateKnown marks an engine snapshot of Stats.LinksPending, even when
 	// unrelated source failures make the pass fail. Early failures lack it.
-	LinkStateKnown  bool     `json:"linkStateKnown,omitempty"`
-	WrittenSessions []string `json:"writtenSessions,omitempty"`
+	LinkStateKnown bool `json:"linkStateKnown,omitempty"`
 }
 
 // syncWorkerRequest carries the pass and any unfinished linking owned by the
@@ -195,18 +188,6 @@ func runSyncWorkerStartup(
 		return err
 	}
 	defer closeWriteDB(database, writeLock)
-	var writtenSessions []string
-	if cfg.Notifications.Enabled && mode != "startup" {
-		written := make(map[string]bool)
-		database.SetSessionWriteObserver(func(ids []string) {
-			for _, id := range ids {
-				if !written[id] {
-					written[id] = true
-					writtenSessions = append(writtenSessions, id)
-				}
-			}
-		})
-	}
 	onProgress(sync.Progress{
 		Phase: sync.PhaseDiscovering, Detail: "Preparing session sync",
 		Resync: mode == "startup" && database.NeedsResync(),
@@ -273,34 +254,11 @@ func runSyncWorkerStartup(
 
 	result.Stats.LinksPending = engine.PendingSubagentLinks()
 	result.LinkStateKnown = true
-	result.WrittenSessions = recentWrittenSessions(ctx, database, writtenSessions, time.Now())
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
 		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
 	}
 	return nil
-}
-
-func recentWrittenSessions(ctx context.Context, database *db.DB, ids []string, now time.Time) []string {
-	recent := ids[:0]
-	for _, id := range ids {
-		session, err := database.GetSession(ctx, id)
-		if err != nil {
-			log.Printf("notification session read: %v", err)
-			continue
-		}
-		if session == nil || session.EndedAt == nil {
-			continue
-		}
-		endedAt, err := time.Parse(time.RFC3339Nano, *session.EndedAt)
-		if err == nil && now.Sub(endedAt) <= notify.FreshnessWindow {
-			recent = append(recent, id)
-			if len(recent) == workerWrittenSessionsMax {
-				break
-			}
-		}
-	}
-	return recent
 }
 
 // runSyncWorkerResyncBuild builds a replacement archive at the resync temp path

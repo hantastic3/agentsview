@@ -1,5 +1,5 @@
 import type { EventSource } from "eventsource";
-import { watchEvents, type DataChangedEvent, type DesktopNotification } from "../api/client.js";
+import { watchEvents, type DataChangedEvent } from "../api/client.js";
 
 type Listener = (e: DataChangedEvent) => void;
 
@@ -10,7 +10,6 @@ type Listener = (e: DataChangedEvent) => void;
 export const EVENTS_STORE_HEAL_INTERVAL_MS = 60_000;
 
 class EventsStore {
-  onNotification: ((n: DesktopNotification) => void) | null = null;
   private es: EventSource | null = null;
   // Use a Map keyed by a unique per-call token so two subscribes
   // of the same function reference are tracked independently and
@@ -109,7 +108,6 @@ class EventsStore {
         for (const fn of this.listeners.values()) fn(e);
       },
       {
-        onNotification: (n) => this.onNotification?.(n),
         onPermanentFailure: () => {
           this.permanentlyFailed = true;
           if (this.healTimer !== null) {

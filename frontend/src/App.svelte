@@ -77,8 +77,7 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
-  import { events } from "./lib/stores/events.svelte.js";
-  import { deliverNotification } from "./lib/notifications.js";
+  import { startNotificationWatcher } from "./lib/notifications.js";
   import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
   import {
     yokedDates,
@@ -805,11 +804,16 @@
     }
   });
 
+  $effect(() => {
+    if (sync.isDesktop && settings.notifications.enabled) {
+      return startNotificationWatcher(
+        () => settings.notifications.notify_new_reply,
+        () => router.route === "sessions" ? sessions.activeSessionId : null,
+      );
+    }
+  });
+
   onMount(() => {
-    events.onNotification = (n) => {
-      void deliverNotification(n, router.route === "sessions" ? sessions.activeSessionId : null);
-    };
-    const notificationCleanup = events.subscribe(() => {});
     globalAuthToken = getAuthToken();
     settings.load();
     starred.load();
@@ -832,8 +836,6 @@
       navigateUserPrompt,
     });
     return () => {
-      events.onNotification = null;
-      notificationCleanup();
       appOpenedCleanup();
       visitEndedCleanup();
       window.removeEventListener("focus", reportScreenView);

@@ -2381,6 +2381,7 @@
   "settings_notifications_title": "桌面通知",
   "settings_notifications_description": "在 Agent 結束本輪回覆或有新回覆時取得通知",
   "settings_notifications_keywords": "通知 桌面 提醒 回覆 結束 notifications",
+  "settings_notifications_permission_denied": "通知權限遭拒。請在系統設定中允許 AgentsView 傳送通知。",
   "settings_notifications_enable": "啟用桌面通知",
   "settings_notifications_turn_end_hint": "僅限桌面應用程式。代理結束回合並等待你回覆時傳送通知。",
   "settings_notifications_new_reply": "也通知新回覆",

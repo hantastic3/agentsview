@@ -1656,10 +1656,3 @@ func logMiddleware(next http.Handler) http.Handler {
 
 // WithRawSyncTenant binds every raw credential/token identity before route work.
 func WithRawSyncTenant(tenant string) Option { return func(s *Server) { s.rawSyncTenant = tenant } }
-
-// NotificationsConfig returns the current notification preferences.
-func (s *Server) NotificationsConfig() config.NotificationsConfig {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.cfg.Notifications
-}

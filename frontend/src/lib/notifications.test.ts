@@ -1,84 +1,220 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { deliverNotification, requestNotificationPermission } from "./notifications.js";
-import type { DesktopNotification } from "./api/client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { SessionsService, type DbSession, type DbMessage } from "./api/generated/index.js";
+import { startNotificationWatcher, requestNotificationPermission } from "./notifications.js";
 
-const notification: DesktopNotification = {
-  kind: "turn_end",
-  session_id: "session",
-  project: "demo",
-  agent: "claude",
-  display_name: "Fix login",
-  excerpt: "Ready for review",
+const mocks = vi.hoisted(() => ({ callback: () => {}, unsubscribe: vi.fn() }));
+vi.mock("./stores/events.svelte.js", () => ({
+  events: {
+    subscribeDebounced: vi.fn((callback) => {
+      mocks.callback = callback;
+      return mocks.unsubscribe;
+    }),
+  },
+}));
+vi.mock("./api/generated/index.js", () => ({
+  SessionsService: {
+    getApiV1Sessions: vi.fn(),
+    getApiV1SessionsByIdMessages: vi.fn(),
+  },
+}));
+const plugin = {
+  isPermissionGranted: vi.fn(),
+  requestPermission: vi.fn(),
+  sendNotification: vi.fn(),
 };
-
+let stop: (() => void) | undefined;
+let row: DbSession;
+const list = vi.mocked(SessionsService.getApiV1Sessions);
+const messages = vi.mocked(SessionsService.getApiV1SessionsByIdMessages);
+async function flush() {
+  for (let i = 0; i < 15; i++) await Promise.resolve();
+}
+async function start(replies = false, viewing: string | null = null) {
+  stop = startNotificationWatcher(
+    () => replies,
+    () => viewing,
+  );
+  await flush();
+  expect(list).toHaveBeenCalled();
+}
+async function change(patch: Partial<DbSession> = {}) {
+  row = { ...row, ...patch };
+  mocks.callback();
+  await flush();
+}
+function reply(patch: Partial<DbMessage> = {}) {
+  return {
+    role: "assistant",
+    content: "Ready for review",
+    timestamp: "2026-10-07T12:00:01Z",
+    is_system: false,
+    has_tool_use: false,
+    ...patch,
+  } as DbMessage;
+}
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-07T12:00:00Z"));
+  vi.stubGlobal("__TAURI__", { notification: plugin });
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  plugin.isPermissionGranted.mockResolvedValue(true);
+  row = {
+    id: "session",
+    agent: "claude",
+    project: "demo",
+    display_name: "Fix login",
+    ended_at: "2026-10-07T12:00:00Z",
+    message_count: 2,
+    is_automated: false,
+  } as DbSession;
+  list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
+  messages.mockResolvedValue({ messages: [reply()], count: 1 });
+});
 afterEach(() => {
+  stop?.();
+  stop = undefined;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
-
-describe("native notifications", () => {
+describe("desktop notification watcher", () => {
+  it("silently baselines waiting sessions and ignores repeats and progress", async () => {
+    row.termination_status = "awaiting_user";
+    await start(true);
+    await change();
+    await change({ ended_at: "2026-10-07T12:00:02Z" });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(messages).not.toHaveBeenCalled();
+    expect(list.mock.calls[0]![0]).toMatchObject({
+      active_since: "2026-10-07T11:50:00.000Z",
+      include_children: true,
+      include_one_shot: true,
+    });
+  });
+  it("toasts a waiting transition once and a later turn with more messages", async () => {
+    await start();
+    await change({ termination_status: "awaiting_user" });
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification.mock.calls[0]![0].title).toContain("Fix login");
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
+  });
+  it("toasts a newly discovered waiting session", async () => {
+    await start();
+    await change({ id: "new", termination_status: "awaiting_user" });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
   it.each([
-    { visibility: "visible", focused: true, viewing: "session", sent: false },
-    { visibility: "hidden", focused: false, viewing: "session", sent: true },
-    { visibility: "visible", focused: false, viewing: "session", sent: true },
-    { visibility: "visible", focused: true, viewing: "other", sent: true },
-  ])(
-    "delivers with $visibility visibility and focus $focused while viewing $viewing",
-    async ({ visibility, focused, viewing, sent }) => {
-      const plugin = {
-        isPermissionGranted: vi.fn().mockResolvedValue(true),
-        requestPermission: vi.fn(),
-        sendNotification: vi.fn(),
-      };
-      vi.stubGlobal("__TAURI__", { notification: plugin });
-      vi.spyOn(document, "visibilityState", "get").mockReturnValue(
-        visibility as DocumentVisibilityState,
-      );
-      vi.spyOn(document, "hasFocus").mockReturnValue(focused);
-      await deliverNotification(notification, viewing);
-      expect(plugin.sendNotification).toHaveBeenCalledTimes(sent ? 1 : 0);
-      if (sent)
-        expect(plugin.sendNotification).toHaveBeenCalledWith({
-          title: "Fix login: reply finished",
-          body: "Ready for review",
-        });
-    },
-  );
-
-  it.each(["granted", "denied"])("requests permission and handles %s", async (permission) => {
-    const plugin = {
-      isPermissionGranted: vi.fn().mockResolvedValue(false),
-      requestPermission: vi.fn().mockResolvedValue(permission),
-      sendNotification: vi.fn(),
-    };
-    vi.stubGlobal("__TAURI__", { notification: plugin });
-    await expect(requestNotificationPermission()).resolves.toBe(permission === "granted");
-    plugin.isPermissionGranted.mockResolvedValue(permission === "granted");
-    await deliverNotification({ ...notification, kind: "new_reply" }, null);
-    expect(plugin.requestPermission).toHaveBeenCalledOnce();
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(permission === "granted" ? 1 : 0);
-    if (permission === "granted")
-      expect(plugin.sendNotification).toHaveBeenCalledWith({
-        title: "Fix login: new reply",
-        body: "Ready for review",
-      });
-  });
-
-  it("does nothing without a desktop bridge", async () => {
-    vi.stubGlobal("__TAURI__", undefined);
-    await expect(requestNotificationPermission()).resolves.toBe(false);
-    await expect(deliverNotification(notification, null)).resolves.toBeUndefined();
-  });
-
-  it("leaves the permission prompt to Settings", async () => {
-    const plugin = {
-      isPermissionGranted: vi.fn().mockResolvedValue(false),
-      requestPermission: vi.fn(),
-      sendNotification: vi.fn(),
-    };
-    vi.stubGlobal("__TAURI__", { notification: plugin });
-    await deliverNotification(notification, null);
-    expect(plugin.requestPermission).not.toHaveBeenCalled();
+    { relationship_type: "subagent" },
+    { is_automated: true },
+    { ended_at: "2026-10-07T11:49:59Z" },
+  ])("keeps excluded sessions silent: %j", async (patch) => {
+    await start(true);
+    await change({ ...patch, termination_status: "awaiting_user", message_count: 4 });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
+  it.each([
+    { visible: "visible", focused: true, sent: false },
+    { visible: "hidden", focused: true, sent: true },
+    { visible: "visible", focused: false, sent: true },
+  ])("respects window visibility and focus: %j", async ({ visible, focused, sent }) => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue(
+      visible as DocumentVisibilityState,
+    );
+    vi.spyOn(document, "hasFocus").mockReturnValue(focused);
+    await start(false, "session");
+    await change({ termination_status: "awaiting_user" });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(sent ? 1 : 0);
+  });
+  it("keeps its successful watermark across a failed fetch", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await start();
+    vi.setSystemTime(new Date("2026-10-07T12:00:05Z"));
+    list.mockRejectedValueOnce(new Error("unavailable"));
+    await change({ termination_status: "awaiting_user" });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date("2026-10-07T12:00:10Z"));
+    await change();
+    expect(list.mock.calls[2]![0]?.active_since).toBe("2026-10-07T11:59:59.700Z");
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it("reads all pages before completing the silent baseline", async () => {
+    list.mockResolvedValueOnce({ sessions: [], total: 1, next_cursor: "page2" });
+    row.termination_status = "awaiting_user";
+    await start();
+    expect(list.mock.calls[1]![0]?.cursor).toBe("page2");
+    await change();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+  it("toasts new assistant prose once and ignores a same-timestamp rewrite", async () => {
+    await start(true);
+    await change({ message_count: 3 });
+    expect(messages).toHaveBeenCalledWith({ id: "session" }, { direction: "desc", limit: 20 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification.mock.calls[0]![0].body).toBe("Ready for review");
+    await change();
+    messages.mockResolvedValue({ messages: [reply({ content: "Rewritten reply" })], count: 1 });
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it.each([{ has_tool_use: true }, { role: "user" }, { content: "  " }])(
+    "ignores a latest message without assistant prose: %j",
+    async (patch) => {
+      messages.mockResolvedValue({ messages: [reply(patch)], count: 1 });
+      await start(true);
+      await change({ message_count: 3 });
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+    },
+  );
+  it("skips system rows when finding the newest reply", async () => {
+    messages.mockResolvedValue({ messages: [reply({ is_system: true }), reply()], count: 2 });
+    await start(true);
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it("delivers the waiting toast even when the reply read fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    messages.mockRejectedValue(new Error("unavailable"));
+    await start(true);
+    await change({ termination_status: "awaiting_user", message_count: 4 });
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+  it("does no reads or delivery when permission is denied", async () => {
+    plugin.isPermissionGranted.mockResolvedValue(false);
+    stop = startNotificationWatcher(
+      () => true,
+      () => null,
+    );
+    await flush();
+    await change({ termination_status: "awaiting_user", message_count: 4 });
+    expect(list).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+  it("stops delivery during a pending fetch and unsubscribes", async () => {
+    await start();
+    let resolve!: (value: Awaited<ReturnType<typeof SessionsService.getApiV1Sessions>>) => void;
+    list.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    await change({ termination_status: "awaiting_user" });
+    stop!();
+    resolve({ sessions: [row], total: 1 });
+    await flush();
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    stop = undefined;
+  });
+});
+it("requests permission only when needed and returns denial", async () => {
+  expect(await requestNotificationPermission()).toBe(true);
+  expect(plugin.requestPermission).not.toHaveBeenCalled();
+  plugin.isPermissionGranted.mockResolvedValue(false);
+  plugin.requestPermission.mockResolvedValue("denied");
+  expect(await requestNotificationPermission()).toBe(false);
+  expect(plugin.requestPermission).toHaveBeenCalledOnce();
 });

@@ -5,14 +5,16 @@ import (
 	"time"
 )
 
-// A dropped notification frame loses a toast; refresh frames already coalesce.
-const broadcasterBufferCap = 256
+// broadcasterBufferCap is the per-subscriber buffer size. A slow
+// client can fall this many events behind before the broadcaster
+// starts dropping events on its channel.
+const broadcasterBufferCap = 8
 
-// Event carries a named payload or an advisory refresh scope.
+// Event is a refresh signal sent by the sync engine after a pass
+// that wrote data. Scope is advisory — subscribers may filter on
+// it but are free to treat it as "refetch now".
 type Event struct {
-	Name    string
-	Payload any
-	Scope   string
+	Scope string
 }
 
 // Broadcaster fans out Event values from the sync engine to all
@@ -52,13 +54,6 @@ func NewBroadcaster(minInterval time.Duration) *Broadcaster {
 		subs:        make(map[chan Event]struct{}),
 		minInterval: minInterval,
 	}
-}
-
-// Publish delivers named events without coalescing refresh signals.
-func (b *Broadcaster) Publish(name string, payload any) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.broadcastLocked(Event{Name: name, Payload: payload})
 }
 
 // Emit delivers scope to every subscriber, subject to rate limiting.

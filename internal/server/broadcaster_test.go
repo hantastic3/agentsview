@@ -321,39 +321,3 @@ func TestBroadcaster_EmitAfterIntervalBroadcastsImmediately(t *testing.T) {
 		}
 	})
 }
-
-func TestBroadcasterPublishPreservesPendingRefresh(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		b := NewBroadcaster(time.Minute)
-		ch, unsub := b.Subscribe()
-		defer unsub()
-		b.Emit("messages")
-		assert.Equal(t, "messages", (<-ch).Scope)
-		b.Emit("sessions")
-		b.Publish("notification", map[string]string{"session_id": "session"})
-		ev := <-ch
-		assert.Equal(t, "notification", ev.Name)
-		assert.Equal(t, map[string]string{"session_id": "session"}, ev.Payload)
-		time.Sleep(time.Minute)
-		synctest.Wait()
-		assert.Equal(t, "sessions", (<-ch).Scope)
-	})
-}
-
-func TestBroadcasterNotificationBurst(t *testing.T) {
-	b := NewBroadcaster(time.Minute)
-	ch, unsub := b.Subscribe()
-	defer unsub()
-	for i := 0; i < 128; i++ {
-		b.Publish("notification", i)
-	}
-	for i := 0; i < 128; i++ {
-		select {
-		case ev := <-ch:
-			assert.Equal(t, "notification", ev.Name)
-			assert.Equal(t, i, ev.Payload)
-		default:
-			t.Fatal("notification burst lost an event")
-		}
-	}
-}

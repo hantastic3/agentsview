@@ -12,9 +12,10 @@ The latest release is
 **New features**
 
 - Get a native desktop toast when an agent finishes a turn and waits for you,
-  including Claude Code. Enable notifications in Settings and optionally toast
-  each new assistant text reply. History, rewrites, subagents, and automated
-  sessions stay silent. Toasts arrive while the desktop app is connected.
+  for providers that store a waiting state, including Claude Code. Enable
+  notifications in Settings and optionally toast each new assistant text reply.
+  History, rewrites, subagents, and automated
+  sessions stay silent. Toasts arrive while the desktop app runs.
 
 ## 0.45.0
 
