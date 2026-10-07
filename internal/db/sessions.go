@@ -3057,8 +3057,7 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 // at insert; the incremental path never re-evaluates it).
 //
 // A non-nil termination_status is an authoritative incremental verdict and
-// is stored as-is. Nil keeps the status when message_count is unchanged and
-// clears it when the count changes.
+// is stored as-is. Nil keeps the status for metadata or system-only appends.
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {
@@ -3080,7 +3079,10 @@ func updateSessionIncrementalTx(ctx context.Context,
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			termination_status = CASE WHEN ? IS NULL AND message_count = ? THEN termination_status ELSE ? END,
+			termination_status = CASE WHEN ? IS NULL AND (message_count = ? OR message_count + (
+				SELECT COUNT(*) FROM messages
+				WHERE session_id = sessions.id AND ordinal >= sessions.next_ordinal AND is_system = 1
+			) = ?) THEN termination_status ELSE ? END,
 			-- Mark the row as last written by the incremental-append path.
 			-- The full-replace writer (upsertSessionArgs) resets this to
 			-- false; parse-diff reads it to classify benign
@@ -3093,7 +3095,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
 		update.HasTotalOutputTokens, update.HasPeakContextTokens,
-		update.TerminationStatus, update.MsgCount, update.TerminationStatus, id,
+		update.TerminationStatus, update.MsgCount, update.MsgCount, update.TerminationStatus, id,
 	)
 	if err != nil {
 		return fmt.Errorf(

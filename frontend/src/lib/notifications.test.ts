@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { deliverNotification } from "./notifications.js";
+import { deliverNotification, requestNotificationPermission } from "./notifications.js";
 import type { DesktopNotification } from "./api/client.js";
 
 const notification: DesktopNotification = {
@@ -52,6 +52,8 @@ describe("native notifications", () => {
       sendNotification: vi.fn(),
     };
     vi.stubGlobal("__TAURI__", { notification: plugin });
+    await expect(requestNotificationPermission()).resolves.toBe(permission === "granted");
+    plugin.isPermissionGranted.mockResolvedValue(permission === "granted");
     await deliverNotification({ ...notification, kind: "new_reply" }, null);
     expect(plugin.requestPermission).toHaveBeenCalledOnce();
     expect(plugin.sendNotification).toHaveBeenCalledTimes(permission === "granted" ? 1 : 0);
@@ -64,6 +66,19 @@ describe("native notifications", () => {
 
   it("does nothing without a desktop bridge", async () => {
     vi.stubGlobal("__TAURI__", undefined);
+    await expect(requestNotificationPermission()).resolves.toBe(false);
     await expect(deliverNotification(notification, null)).resolves.toBeUndefined();
+  });
+
+  it("leaves the permission prompt to Settings", async () => {
+    const plugin = {
+      isPermissionGranted: vi.fn().mockResolvedValue(false),
+      requestPermission: vi.fn(),
+      sendNotification: vi.fn(),
+    };
+    vi.stubGlobal("__TAURI__", { notification: plugin });
+    await deliverNotification(notification, null);
+    expect(plugin.requestPermission).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
 });

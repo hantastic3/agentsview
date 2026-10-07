@@ -8514,6 +8514,44 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 	}
 }
 
+func TestWriteSessionIncrementalSystemOnlyStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		role     string
+		isSystem bool
+		status   *string
+		want     *string
+	}{
+		{name: "system append", role: "user", isSystem: true, want: new("awaiting_user")},
+		{name: "user append", role: "user"},
+		{name: "assistant append", role: "assistant"},
+		{name: "authoritative status", role: "user", isSystem: true, status: new("interrupted"), want: new("interrupted")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			_, err := d.WriteSessionBatch([]SessionBatchWrite{{
+				Session: Session{ID: "session", Agent: "claude", MessageCount: 1, NextOrdinal: 1, TerminationStatus: new("awaiting_user")}, ReplaceMessages: true,
+				Messages: []Message{{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "done"}},
+			}})
+			require.NoError(t, err)
+			_, err = d.WriteSessionIncremental(t.Context(), "session", []Message{
+				{SessionID: "session", Ordinal: 1, Role: "user", IsSystem: true, Content: "system notice"},
+			}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2})
+			require.NoError(t, err)
+			_, err = d.WriteSessionIncremental(t.Context(), "session", []Message{
+				{SessionID: "session", Ordinal: 2, Role: tc.role, IsSystem: tc.isSystem, Content: "new message"},
+				{SessionID: "session", Ordinal: 3, Role: "user", IsSystem: true, Content: "system notice"},
+			}, IncrementalSessionUpdate{MsgCount: 4, NextOrdinal: 4, TerminationStatus: tc.status})
+			require.NoError(t, err)
+			session, err := d.GetSessionFull(t.Context(), "session")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, tc.want, session.TerminationStatus)
+			assert.Equal(t, 4, session.MessageCount)
+		})
+	}
+}
+
 // TestLastWriteIncrementalMarker pins the parse-diff detection signal:
 // a fresh full write (UpsertSession) leaves last_write_incremental
 // false, an incremental append (WriteSessionIncremental) sets it true,

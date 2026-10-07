@@ -2,13 +2,17 @@
   import { Toggle } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { settings } from "../../stores/settings.svelte.js";
+  import { requestNotificationPermission } from "../../notifications.js";
 </script>
 
 <Toggle
   checked={settings.notifications.enabled}
   disabled={settings.saving || settings.readOnly}
   ariaLabel={m.settings_notifications_enable()}
-  onchange={(enabled) => settings.save({ notifications: { ...settings.notifications, enabled } })}
+  onchange={(enabled) => {
+    if (enabled) void requestNotificationPermission();
+    return settings.save({ notifications: { ...settings.notifications, enabled } });
+  }}
 >
   {m.settings_notifications_enable()}
 </Toggle>

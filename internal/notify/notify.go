@@ -35,13 +35,16 @@ type notifiedMessage struct {
 }
 
 type Hub struct {
-	store   *db.DB
+	store interface {
+		GetSession(context.Context, string) (*db.Session, error)
+		GetLatestNonSystemMessage(context.Context, string) (*db.Message, error)
+	}
 	cfg     func() config.NotificationsConfig
 	publish func(Notification)
 	now     func() time.Time
 	since   time.Time
 	mu      sync.Mutex
-	pending map[string]bool
+	pending map[string]bool // True after a failed read was logged.
 	wake    chan struct{}
 	seen    map[string]notifiedMessage
 }
@@ -58,7 +61,9 @@ func New(store *db.DB, cfg func() config.NotificationsConfig, publish func(Notif
 func (h *Hub) Enqueue(ids []string) {
 	h.mu.Lock()
 	for _, id := range ids {
-		h.pending[id] = true
+		if _, ok := h.pending[id]; !ok {
+			h.pending[id] = false
+		}
 	}
 	h.mu.Unlock()
 	select {
@@ -94,12 +99,10 @@ func (h *Hub) process(ctx context.Context) {
 		h.since = now
 		return
 	}
-	for id := range ids {
+	for id, logged := range ids {
 		session, err := h.store.GetSession(ctx, id)
 		if err != nil {
-			if ctx.Err() == nil {
-				log.Printf("notification session read: %v", err)
-			}
+			h.retryRead(ctx, id, logged, err)
 			continue
 		}
 		if session == nil || session.RelationshipType == "subagent" || session.IsAutomated {
@@ -107,12 +110,10 @@ func (h *Hub) process(ctx context.Context) {
 		}
 		latest, err := h.store.GetLatestNonSystemMessage(ctx, id)
 		if err != nil {
-			if ctx.Err() == nil {
-				log.Printf("notification message read: %v", err)
-			}
+			h.retryRead(ctx, id, logged, err)
 			continue
 		}
-		if latest == nil || latest.Role != "assistant" || latest.HasToolUse {
+		if latest == nil || latest.Role != "assistant" {
 			continue
 		}
 		timestamp, err := time.Parse(time.RFC3339Nano, latest.Timestamp)
@@ -129,7 +130,7 @@ func (h *Hub) process(ctx context.Context) {
 		}
 		n := Notification{Kind: "turn_end", SessionID: id, Project: session.Project, Agent: session.Agent, Excerpt: stringutil.TruncateRunes(latest.Content, 160, "…")}
 		if session.TerminationStatus == nil || *session.TerminationStatus != "awaiting_user" {
-			if !cfg.NotifyNewReply || latest.Content == "" || seen.newReply {
+			if !cfg.NotifyNewReply || latest.HasToolUse || latest.SourceSubtype == "tool_result" || latest.Content == "" || seen.newReply {
 				continue
 			}
 			n.Kind = "new_reply"
@@ -145,5 +146,14 @@ func (h *Hub) process(ctx context.Context) {
 		}
 		h.seen[id] = seen
 		h.publish(n)
+	}
+}
+
+func (h *Hub) retryRead(ctx context.Context, id string, logged bool, err error) {
+	h.mu.Lock()
+	h.pending[id] = logged || ctx.Err() == nil
+	h.mu.Unlock()
+	if !logged && ctx.Err() == nil {
+		log.Printf("notification read: %v", err)
 	}
 }

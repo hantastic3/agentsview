@@ -183,7 +183,10 @@ fixtures retain this field; missing identities remain source-local.
   assistant is last. User-only and tool-result-only tails return no verdict,
   clearing stored status when the message count changes. Empty tool-result
   carriers are filtered before storage and keep the count and status unchanged.
-  Metadata-only tails keep the stored status. Partial trailing lines wait for
+  Metadata-only and system-only tails keep the stored status, including
+  task-notification envelopes that add stored rows. Reverified with
+  `TestIncrementalSync_ClaudeTurnStatusTails` and
+  `TestWriteSessionIncrementalSystemOnlyStatus`. Partial trailing lines wait for
   the next append without overriding the verdict from complete messages.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with

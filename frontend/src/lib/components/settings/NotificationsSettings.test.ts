@@ -15,9 +15,18 @@ beforeEach(() => {
   settings.readOnly = false;
   settings.saving = false;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 it("saves each notification toggle and renders the saved value", async () => {
+  const plugin = {
+    isPermissionGranted: vi.fn().mockResolvedValue(false),
+    requestPermission: vi.fn().mockResolvedValue("granted"),
+    sendNotification: vi.fn(),
+  };
+  vi.stubGlobal("__TAURI__", { notification: plugin });
   const save = vi.mocked(SettingsService.putApiV1Settings);
   const response: Omit<SettingsResponse, "notifications"> = {
     agent_dirs: {},
@@ -41,7 +50,9 @@ it("saves each notification toggle and renders the saved value", async () => {
   const enabled = getByRole("switch", { name: "Enable desktop notifications" });
   const replies = getByRole("switch", { name: "Also notify on new replies" });
   expect(replies.hasAttribute("disabled")).toBe(true);
+  expect(plugin.requestPermission).not.toHaveBeenCalled();
   await fireEvent.click(enabled);
+  expect(plugin.requestPermission).toHaveBeenCalledOnce();
   expect(save).toHaveBeenCalledWith({ notifications: { enabled: true, notify_new_reply: false } });
   expect((enabled as HTMLInputElement).checked).toBe(true);
   save.mockResolvedValue({ ...response, notifications: { enabled: true, notify_new_reply: true } });
@@ -50,4 +61,14 @@ it("saves each notification toggle and renders the saved value", async () => {
     notifications: { enabled: true, notify_new_reply: true },
   });
   expect((replies as HTMLInputElement).checked).toBe(true);
+  save.mockResolvedValue({
+    ...response,
+    notifications: { enabled: false, notify_new_reply: true },
+  });
+  await fireEvent.click(enabled);
+  expect(save).toHaveBeenLastCalledWith({
+    notifications: { enabled: false, notify_new_reply: true },
+  });
+  expect(plugin.requestPermission).toHaveBeenCalledOnce();
+  expect(plugin.sendNotification).not.toHaveBeenCalled();
 });

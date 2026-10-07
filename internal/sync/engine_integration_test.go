@@ -18408,6 +18408,7 @@ func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 		want  []string
 	}{
 		{"separate duration", []string{answer, duration}, []string{"awaiting_user", "awaiting_user"}},
+		{"system-only task notification", []string{answer, testjsonl.ClaudeUserJSON("<task-notification>background task finished</task-notification>", tsEarlyS5) + "\n"}, []string{"awaiting_user", "awaiting_user"}},
 		{"same tail duration", []string{answer + duration}, []string{"awaiting_user"}},
 		{"incomplete final line", []string{answer + `{"type":"user"`}, []string{"awaiting_user"}},
 		{"two tools one result", []string{

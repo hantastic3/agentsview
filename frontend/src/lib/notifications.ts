@@ -7,6 +7,18 @@ type NotificationBridge = {
   sendNotification: (options: { title: string; body: string }) => void;
 };
 
+export async function requestNotificationPermission(): Promise<boolean> {
+  const plugin = (window as Window & { __TAURI__?: { notification?: NotificationBridge } })
+    .__TAURI__?.notification;
+  if (!plugin) return false;
+  try {
+    return (await plugin.isPermissionGranted()) || (await plugin.requestPermission()) === "granted";
+  } catch (err) {
+    console.warn("native notification permission failed", err);
+    return false;
+  }
+}
+
 export async function deliverNotification(
   n: DesktopNotification,
   viewingId: string | null,
@@ -17,9 +29,7 @@ export async function deliverNotification(
     .__TAURI__?.notification;
   if (!plugin) return;
   try {
-    const granted =
-      (await plugin.isPermissionGranted()) || (await plugin.requestPermission()) === "granted";
-    if (!granted) return;
+    if (!(await plugin.isPermissionGranted())) return;
     const name = n.display_name || n.project || n.agent;
     plugin.sendNotification({
       title:

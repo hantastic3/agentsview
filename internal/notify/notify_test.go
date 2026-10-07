@@ -1,6 +1,10 @@
 package notify
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -182,12 +186,18 @@ func TestHubAssistantRows(t *testing.T) {
 	for _, tc := range []struct {
 		name, role, content string
 		termination         string
+		subtype             string
 		toolUse             bool
 		want                int
+		wantKind            string
 	}{
-		{name: "tool call", role: "assistant", content: "running", toolUse: true},
+		{name: "tool call reply", role: "assistant", content: "running", toolUse: true, termination: "tool_call_pending"},
+		{name: "resolved tool turn", role: "assistant", content: "running", toolUse: true, want: 1, wantKind: "turn_end"},
+		{name: "resolved tool without prose", role: "assistant", toolUse: true, want: 1, wantKind: "turn_end"},
+		{name: "tool result reply", role: "assistant", content: "command output", subtype: "tool_result", termination: "clean"},
+		{name: "text reply", role: "assistant", content: "answer", termination: "clean", want: 1, wantKind: "new_reply"},
 		{name: "empty reply", role: "assistant", termination: "tool_call_pending"},
-		{name: "empty turn end", role: "assistant", want: 1},
+		{name: "empty turn end", role: "assistant", want: 1, wantKind: "turn_end"},
 		{name: "prompt after answer", role: "user", content: "follow up"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -206,16 +216,83 @@ func TestHubAssistantRows(t *testing.T) {
 			_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{
 				Session:         db.Session{ID: "session", Agent: "claude", Project: "demo", MessageCount: 1, TerminationStatus: &termination},
 				ReplaceMessages: true,
-				Messages:        []db.Message{{SessionID: "session", Ordinal: 0, Role: tc.role, Content: tc.content, HasToolUse: tc.toolUse, Timestamp: now.Format(time.RFC3339Nano)}},
+				Messages:        []db.Message{{SessionID: "session", Ordinal: 0, Role: tc.role, Content: tc.content, HasToolUse: tc.toolUse, SourceSubtype: tc.subtype, Timestamp: now.Format(time.RFC3339Nano)}},
 			}})
 			require.NoError(t, err)
 			hub.Enqueue([]string{"session"})
 			hub.process(t.Context())
 			require.Len(t, sent, tc.want)
 			if tc.want > 0 {
-				assert.Equal(t, "turn_end", sent[0].Kind)
-				assert.Empty(t, sent[0].Excerpt)
+				assert.Equal(t, tc.wantKind, sent[0].Kind)
+				assert.Equal(t, tc.content, sent[0].Excerpt)
 			}
+			hub.Enqueue([]string{"session"})
+			hub.process(t.Context())
+			assert.Len(t, sent, tc.want, "same message fires once")
+		})
+	}
+}
+
+type failingReadStore struct {
+	*db.DB
+	failSession bool
+	failMessage bool
+}
+
+func (s *failingReadStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
+	if s.failSession {
+		return nil, errors.New("session read unavailable")
+	}
+	return s.DB.GetSession(ctx, id)
+}
+
+func (s *failingReadStore) GetLatestNonSystemMessage(ctx context.Context, id string) (*db.Message, error) {
+	if s.failMessage {
+		return nil, errors.New("message read unavailable")
+	}
+	return s.DB.GetLatestNonSystemMessage(ctx, id)
+}
+
+func TestHubReadErrorRetriesOnNextWake(t *testing.T) {
+	for _, read := range []string{"session", "message"} {
+		t.Run(read, func(t *testing.T) {
+			store := dbtest.OpenTestDB(t)
+			now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			_, err := store.WriteSessionBatch([]db.SessionBatchWrite{{
+				Session: db.Session{ID: "session", Agent: "codex", MessageCount: 1, TerminationStatus: dbtest.Ptr("awaiting_user")}, ReplaceMessages: true,
+				Messages: []db.Message{{SessionID: "session", Role: "assistant", Content: "done", Timestamp: now.Format(time.RFC3339Nano)}},
+			}})
+			require.NoError(t, err)
+			var sent []Notification
+			hub := New(store, func() config.NotificationsConfig { return config.NotificationsConfig{Enabled: true} }, func(n Notification) { sent = append(sent, n) })
+			hub.now = func() time.Time { return now }
+			hub.since = now.Add(-time.Second)
+			reader := &failingReadStore{DB: store, failSession: read == "session", failMessage: read == "message"}
+			hub.store = reader
+			var logs bytes.Buffer
+			oldOutput := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(oldOutput) })
+			hub.Enqueue([]string{"session"})
+			<-hub.wake
+			hub.process(t.Context())
+			assert.Empty(t, sent)
+			assert.Empty(t, hub.wake, "failed reads wait for another write")
+			hub.Enqueue([]string{"session"})
+			<-hub.wake
+			hub.process(t.Context())
+			assert.Equal(t, 1, strings.Count(logs.String(), "notification read:"))
+			reader.failSession, reader.failMessage = false, false
+			hub.Enqueue([]string{"other"})
+			<-hub.wake
+			hub.process(t.Context())
+			require.Len(t, sent, 1)
+			assert.Equal(t, "session", sent[0].SessionID)
+			assert.Equal(t, "turn_end", sent[0].Kind)
+			hub.Enqueue([]string{"other"})
+			<-hub.wake
+			hub.process(t.Context())
+			assert.Len(t, sent, 1)
 		})
 	}
 }
