@@ -23,6 +23,7 @@ import (
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/stringutil"
+	"golang.org/x/mod/semver"
 )
 
 var (
@@ -572,6 +573,8 @@ func compactClaudeEntry(line []byte) string {
 		{name: "timestamp"},
 		{name: "isCompactSummary"},
 		{name: "isSidechain"},
+		{name: "entrypoint"},
+		{name: "version"},
 		{name: "isMeta"},
 		{name: "requestId"},
 		{name: "promptSource"},
@@ -743,16 +746,22 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 	return ""
 }
 
+func claudeWritesTurnDuration(line string) bool {
+	return gjson.Get(line, "entrypoint").Str == "cli" &&
+		!gjson.Get(line, "isSidechain").Bool() &&
+		semver.Compare("v"+gjson.Get(line, "version").Str, "v2.1.259") >= 0
+}
+
 type claudeTurnDuration struct {
-	seen     bool
 	position int
 	pending  int64
+	line     string
 	status   *TerminationStatus
 }
 
 func (d *claudeTurnDuration) observe(line string, position int) {
 	if gjson.Get(line, "subtype").Str == "turn_duration" {
-		d.seen = true
+		d.line = line
 		d.position = position
 		d.pending = gjson.Get(line, "pendingBackgroundAgentCount").Int()
 	}
@@ -760,50 +769,46 @@ func (d *claudeTurnDuration) observe(line string, position int) {
 
 func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, duration claudeTurnDuration, truncated bool) TerminationStatus {
 	status := Classify(messages, lastAssistantStopReason(messages), truncated)
-	if !duration.seen || status == TerminationTruncated || status == TerminationToolCallPending {
+	if status == TerminationTruncated {
 		return status
 	}
 	for _, msg := range slices.Backward(messages) {
 		if msg.IsSystem {
 			continue
 		}
-		if msg.Role != RoleAssistant {
-			return TerminationClean
-		}
 		for _, entry := range slices.Backward(entries) {
-			if entry.entryType == "assistant" && entry.uuid == msg.SourceUUID && !gjson.Get(entry.line, "isCompactSummary").Bool() {
+			if entry.uuid == msg.SourceUUID {
+				if !claudeWritesTurnDuration(entry.line) {
+					return status
+				}
 				if duration.position > entry.lineIndex && duration.pending == 0 {
 					return TerminationAwaitingUser
 				}
-				return TerminationClean
+				if status == TerminationAwaitingUser {
+					return TerminationClean
+				}
+				return status
 			}
 		}
-		return TerminationClean
+		return status
 	}
-	if duration.pending > 0 {
-		return TerminationClean
-	}
-	return TerminationAwaitingUser
+	return status
 }
 
-func claudeHasTurnDuration(ctx context.Context, path string, offset int64) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	lr := newLineReaderContext(ctx, io.LimitReader(f, offset), maxLineSize)
-	defer releaseLineReader(lr)
-	for {
-		line, ok := lr.next()
-		if !ok {
-			break
-		}
-		if gjson.Valid(line) && gjson.Get(line, "type").Str == "system" && gjson.Get(line, "subtype").Str == "turn_duration" {
-			return true, nil
+func (d *claudeTurnDuration) classifyTail(messages []ParsedMessage, entries []dagEntry) {
+	for _, msg := range messages {
+		if !msg.IsSystem && (msg.Role == RoleAssistant || len(msg.ToolResults) == 0) {
+			d.status = new(classifyClaudeTermination(messages, entries, *d, false))
+			return
 		}
 	}
-	return false, lr.Err()
+	if claudeWritesTurnDuration(d.line) {
+		status := TerminationClean
+		if d.pending == 0 {
+			status = TerminationAwaitingUser
+		}
+		d.status = new(status)
+	}
 }
 
 // claudeParseSessionFrom parses only new lines from a Claude JSONL
@@ -1050,8 +1055,8 @@ func claudeParseSessionFrom(
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
-		if scan.turnDuration != nil && scan.turnDuration.seen {
-			scan.turnDuration.status = new(classifyClaudeTermination(nil, nil, *scan.turnDuration, false))
+		if scan.turnDuration != nil {
+			scan.turnDuration.classifyTail(nil, nil)
 		}
 		return nil, links, latestTS, consumed, nil
 	}
@@ -1126,15 +1131,7 @@ func claudeParseSessionFrom(
 		endedAt = latestTS
 	}
 	if scan.turnDuration != nil {
-		for _, msg := range msgs {
-			if msg.Role == RoleAssistant && !msg.IsSystem {
-				scan.turnDuration.status = new(classifyClaudeTermination(msgs, entries, *scan.turnDuration, false))
-				break
-			}
-		}
-		if scan.turnDuration.status == nil && scan.turnDuration.seen {
-			scan.turnDuration.status = new(classifyClaudeTermination(msgs, entries, *scan.turnDuration, false))
-		}
+		scan.turnDuration.classifyTail(msgs, entries)
 	}
 	return msgs, links, endedAt, consumed, nil
 }

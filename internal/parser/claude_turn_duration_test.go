@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,10 +18,11 @@ func TestClaudeTurnDuration(t *testing.T) {
 	answer := testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n"
 	initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly), testjsonl.ClaudeAssistantJSON("ready", tsEarlyS1, "end_turn")) + duration + testjsonl.ClaudeUserJSON("continue", tsEarlyS2) + "\n"
 	for _, tc := range []struct {
-		name    string
-		initial string
-		tails   []string
-		want    []TerminationStatus
+		name     string
+		producer string
+		initial  string
+		tails    []string
+		want     []TerminationStatus
 	}{
 		{
 			name: "blocked then allowed stop", initial: initial,
@@ -41,15 +43,41 @@ func TestClaudeTurnDuration(t *testing.T) {
 			tails: []string{duration + answer, duration}, want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "sdk-cli without duration", initial: `{"type":"user","entrypoint":"sdk-cli","message":{"content":"hello"}}` + "\n",
+			name: "first interactive turn", initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
+			tails: []string{answer, duration}, want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "oldest verified cli", producer: `"entrypoint":"cli","version":"2.1.259",`, initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
+			tails: []string{answer, duration}, want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "duration finishes pending tool", initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
+			tails: []string{`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-a","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n", duration},
+			want:  []TerminationStatus{TerminationToolCallPending, TerminationAwaitingUser},
+		},
+		{
+			name: "older cli", producer: `"entrypoint":"cli","version":"2.1.200",`, initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
 			tails: []string{answer}, want: []TerminationStatus{TerminationAwaitingUser},
 		},
 		{
-			name: "cli without duration", initial: `{"type":"user","entrypoint":"cli","message":{"content":"hello"}}` + "\n",
+			name: "sdk-cli", producer: `"entrypoint":"sdk-cli","version":"2.1.266",`, initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
+			tails: []string{answer}, want: []TerminationStatus{TerminationAwaitingUser},
+		},
+		{
+			name: "no version", producer: `"entrypoint":"cli",`, initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
+			tails: []string{answer}, want: []TerminationStatus{TerminationAwaitingUser},
+		},
+		{
+			name: "sidechain", producer: `"entrypoint":"cli","version":"2.1.266","isSidechain":true,`, initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
 			tails: []string{answer}, want: []TerminationStatus{TerminationAwaitingUser},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			producer := tc.producer
+			if producer == "" {
+				producer = `"entrypoint":"cli","version":"2.1.266",`
+			}
+			tc.initial = claudeTurnDurationProducer(tc.initial, producer)
 			root := t.TempDir()
 			path := filepath.Join(root, "project", "session.jsonl")
 			writeSourceFile(t, path, tc.initial)
@@ -67,6 +95,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 			status := TerminationClean
 			waiting := 0
 			for i, tail := range tc.tails {
+				tail = claudeTurnDurationProducer(tail, producer)
 				offset := int64(len(content))
 				content += tail
 				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
@@ -80,7 +109,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 				})
 				require.NoError(t, err)
 				require.Equal(t, IncrementalApplied, applied)
-				if tail == duration || tail == pending {
+				if tc.tails[i] == duration || tc.tails[i] == pending {
 					require.NotNil(t, outcome.TerminationStatus)
 					assert.Empty(t, outcome.Messages)
 				}
@@ -107,14 +136,19 @@ func TestClaudeTurnDurationPrecedence(t *testing.T) {
 		name, tail string
 		want       TerminationStatus
 	}{
-		{"pending tool", `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-a","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n" + duration, TerminationToolCallPending},
 		{"truncated", testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n" + duration + `{"type":"user"`, TerminationTruncated},
 		{"user replied", testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n" + duration + testjsonl.ClaudeUserJSON("more", tsEarlyS2) + "\n", TerminationClean},
-		{"compact boundary", testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n" + duration + `{"type":"assistant","isCompactSummary":true,"message":{"content":"summary"}}` + "\n", TerminationAwaitingUser},
+		{"compact boundary", testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n" + duration + `{"type":"assistant","uuid":"summary","isCompactSummary":true,"message":{"content":"summary"}}` + "\n", TerminationAwaitingUser},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			session, _ := runClaudeParserTest(t, "session.jsonl", testjsonl.ClaudeUserJSON("hello", tsEarly)+"\n"+tc.tail)
+			content := testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n" + tc.tail
+			content = claudeTurnDurationProducer(content, `"entrypoint":"cli","version":"2.1.266",`)
+			session, _ := runClaudeParserTest(t, "session.jsonl", content)
 			assert.Equal(t, tc.want, session.TerminationStatus)
 		})
 	}
+}
+
+func claudeTurnDurationProducer(content, producer string) string {
+	return "{" + producer + strings.ReplaceAll(content[1:], "\n{", "\n{"+producer)
 }

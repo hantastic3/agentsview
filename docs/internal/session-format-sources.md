@@ -188,20 +188,20 @@ fixtures retain this field; missing identities remain source-local.
   Headless `claude -p`, entrypoint `sdk-cli`, writes no `turn_duration`.
   These records stay outside the stored messages.
 
-- **Incremental turn status (2026-10-07):** Once a transcript contains
-  `turn_duration`, `awaiting_user` requires a duration after its last assistant
-  message with zero background agents pending. Until then the status is
-  `clean`; truncation and pending tool calls retain precedence. Full parsing
-  tracks record order. Incremental parsing also returns a verdict for
-  duration-only tails and checks the prefix for the first duration when an
-  appended `end_turn` has none. Transcripts with no duration retain the
-  `end_turn` signal, including older CLI and headless sessions. Result-only
-  tails preserve pending tool status. User-only tails clear stored status when
-  the message count changes. Other metadata and system-only tails preserve
-  status, including task notifications. Partial trailing lines wait for the
-  next append. Covered by `TestClaudeTurnDuration`,
-  `TestClaudeTurnDurationPrecedence`, `TestIncrementalSync_ClaudeTurnDuration`,
-  and `TestIncrementalSync_ClaudeTurnStatusTails`.
+- **Incremental turn status (2026-10-07):** Each message line with entrypoint
+  `cli`, version 2.1.259 or newer, and `isSidechain` false uses `turn_duration`
+  to finish the turn. Full parsing requires a later duration with zero pending
+  background agents. That duration supersedes pending tool calls; truncation
+  keeps precedence. Until completion, an `end_turn` gives `clean`. Older CLI,
+  headless, sidechain, and unversioned lines keep the `end_turn` signal.
+  Incremental parsing uses only appended lines. A duration-only tail uses its
+  own producer fields and gives `awaiting_user` at zero pending agents or
+  `clean` otherwise. System-only and result-only tails preserve stored status.
+  User replies give `clean`. Partial trailing lines wait for the next append.
+  Reverified against the parser and sync
+  fixtures in `TestClaudeTurnDuration`, `TestClaudeTurnDurationPrecedence`,
+  `TestIncrementalSync_ClaudeTurnDuration`, and
+  `TestIncrementalSync_ClaudeTurnStatusTails`.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.

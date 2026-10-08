@@ -1296,14 +1296,12 @@ load; a saved language preference takes precedence.
 
 ![Settings with Spanish selected](/docs/assets/generated/screenshots/settings-spanish.png)
 
-Desktop notifications alert you when an agent finishes its turn and waits for
-you, including forks and continuations. History, restores, subagents, automated
-sessions, and the session in a focused window stay silent. Missed updates arrive
-within five minutes while the app runs. Toasts follow the OS notification
-settings for agentsview.
-For Claude transcripts that record `turn_duration`, toasts wait until Stop
-hooks finish and no background agents remain pending. Older and headless
-transcripts use the assistant's `end_turn` signal.
+Desktop notifications alert you when the turn really ends and the agent waits
+for you, including forks and continuations. The first refresh, subagents,
+automated sessions, and the session in a focused window stay silent. Missed
+updates arrive within five minutes while the app runs. A full re-import that
+relabels an old session or a restore of a recently finished session can toast.
+Toasts follow the OS notification settings for agentsview.
 On platforms that report denied permission, the toggle stays off and shows how
 to allow notifications. Apps without the notification bridge show unavailable.
 

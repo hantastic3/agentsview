@@ -49,7 +49,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       activity: number;
     }
   >();
-  const startedAt = Date.now();
+  let primed = false;
   let stopped = false;
   let running = false;
   let pending = false;
@@ -105,7 +105,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
           (previous
             ? previous.status !== "awaiting_user" ||
               previous.user_message_count !== row.user_message_count
-            : activity > startedAt);
+            : primed);
         try {
           if (
             !silent &&
@@ -145,6 +145,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         if (turnEnd) send(row);
         seen.set(row.id, entry);
       }
+      primed = true;
       for (const [id, entry] of seen) {
         if (entry.activity < fetchedAt - RETENTION_MS) seen.delete(id);
       }

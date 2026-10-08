@@ -396,15 +396,6 @@ func (p *claudeProvider) ParseIncremental(
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
 	termination := turnDuration.status
-	if !turnDuration.seen && termination != nil && *termination == TerminationAwaitingUser {
-		seen, err := claudeHasTurnDuration(ctx, path, req.Offset)
-		if err != nil {
-			return IncrementalOutcome{}, IncrementalNeedsFullParse, err
-		}
-		if seen {
-			termination = new(TerminationClean)
-		}
-	}
 	if len(newMsgs) == 0 {
 		if consumed > 0 {
 			return IncrementalOutcome{

@@ -86,20 +86,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("desktop notification watcher", () => {
-  it("silently baselines waiting sessions and ignores repeats and progress", async () => {
-    row.termination_status = "awaiting_user";
-    await start();
-    await change();
-    await change({ ended_at: "2026-10-07T12:00:02Z" });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    expect(messages).not.toHaveBeenCalled();
-    expect(list.mock.calls[0]![0]).toMatchObject({
-      active_since: "2026-10-07T11:50:00.000Z",
-      each_row: true,
-      include_one_shot: true,
-    });
-    expect(list.mock.calls[0]![0]?.include_children).toBeUndefined();
-  });
+  it.each(["2026-10-07T11:59:00Z", "2026-10-07T12:05:00Z"])(
+    "silently baselines waiting sessions at %s and ignores repeats and progress",
+    async (ended_at) => {
+      row.ended_at = ended_at;
+      row.termination_status = "awaiting_user";
+      await start();
+      await change();
+      await change({ ended_at: "2026-10-07T12:00:02Z" });
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+      expect(messages).not.toHaveBeenCalled();
+      expect(list.mock.calls[0]![0]).toMatchObject({
+        active_since: "2026-10-07T11:50:00.000Z",
+        each_row: true,
+        include_one_shot: true,
+      });
+      expect(list.mock.calls[0]![0]?.include_children).toBeUndefined();
+    },
+  );
   it("toasts a waiting transition once and a later user turn", async () => {
     await start();
     await change({ termination_status: "awaiting_user" });
@@ -136,16 +140,19 @@ describe("desktop notification watcher", () => {
     await change({ message_count: 5 });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("toasts a newly discovered waiting session", async () => {
-    await start();
-    await change({
-      id: "new",
-      termination_status: "awaiting_user",
-      ended_at: "2026-10-07T12:00:01Z",
-    });
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
-    expect(messages).not.toHaveBeenCalled();
-  });
+  it.each(["2026-10-07T11:59:00Z", "2026-10-07T12:00:01Z", "2026-10-07T12:05:00Z"])(
+    "toasts a newly discovered waiting session at %s",
+    async (ended_at) => {
+      await start();
+      await change({
+        id: "new",
+        termination_status: "awaiting_user",
+        ended_at,
+      });
+      expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+      expect(messages).not.toHaveBeenCalled();
+    },
+  );
   it.each([{ relationship_type: "subagent" }])(
     "keeps excluded sessions silent: %j",
     async (patch) => {
@@ -267,7 +274,7 @@ describe("desktop notification watcher", () => {
     expect(session).not.toHaveBeenCalled();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
-  it("keeps restored waiting sessions silent without reading messages", async () => {
+  it("toasts restored waiting sessions without reading messages", async () => {
     await start();
     await change({
       id: "restored",
@@ -275,7 +282,7 @@ describe("desktop notification watcher", () => {
       ended_at: "2026-10-07T11:59:00Z",
     });
     expect(messages).not.toHaveBeenCalled();
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it.each([
     { delta: 2, limit: 2 },
