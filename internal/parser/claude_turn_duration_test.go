@@ -11,6 +11,7 @@ import (
 )
 
 func TestClaudeTurnDuration(t *testing.T) {
+	// Claude Code omits pendingBackgroundAgentCount and pendingWorkflowCount at zero.
 	const tsEarlyS2 = "2024-01-01T10:00:02Z"
 	const duration = `{"type":"system","subtype":"turn_duration","durationMs":1000}` + "\n"
 	const pending = `{"type":"system","subtype":"turn_duration","durationMs":1000,"pendingBackgroundAgentCount":2}` + "\n"
@@ -36,6 +37,21 @@ func TestClaudeTurnDuration(t *testing.T) {
 		{
 			name: "duration in same tail", initial: initial,
 			tails: []string{answer + duration}, want: []TerminationStatus{TerminationAwaitingUser},
+		},
+		{
+			name: "pending workflow", producer: `"entrypoint":"cli","version":"2.1.293",`, initial: initial,
+			tails: []string{answer + `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}` + "\n", `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}` + "\n", duration},
+			want:  []TerminationStatus{TerminationClean, TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name:    "duration descends through stop hook summary",
+			initial: `{"type":"user","uuid":"u0","parentUuid":null,"message":{"content":"hello"}}` + "\n",
+			tails: []string{
+				`{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"done","stop_reason":"end_turn"}}` + "\n",
+				`{"type":"system","subtype":"stop_hook_summary","uuid":"s0","parentUuid":"a0","hookErrors":[]}` + "\n",
+				`{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"s0"}` + "\n",
+			},
+			want: []TerminationStatus{TerminationClean, TerminationClean, TerminationAwaitingUser},
 		},
 		{
 			name: "duration before assistant in same tail", initial: initial,
@@ -157,6 +173,11 @@ func TestClaudeTurnDuration(t *testing.T) {
 			{
 				name: "fork finished before main duration",
 				tail: `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"af"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4","pendingBackgroundAgentCount":2}` + "\n",
+				main: TerminationClean, fork: TerminationAwaitingUser,
+			},
+			{
+				name: "hook summaries keep branch ownership",
+				tail: `{"type":"system","subtype":"stop_hook_summary","uuid":"sf","parentUuid":"af"}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","uuid":"sm","parentUuid":"a4"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"sf"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"sm","pendingWorkflowCount":1}` + "\n",
 				main: TerminationClean, fork: TerminationAwaitingUser,
 			},
 		} {

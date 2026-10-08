@@ -243,8 +243,8 @@ enabled = false
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                                                                                                                                                                                                                                                |
 
 Claude transcripts that record `turn_duration` trigger toasts after Stop hooks
-finish, with no background agents pending. Older and headless transcripts use
-the assistant's `end_turn` signal.
+finish, with no background agents or workflows pending. Older and headless
+transcripts use the assistant's `end_turn` signal.
 
 Each session's first sighting stays silent, including restored sessions.
 Toasts require a later turn completion in a session the app has already seen.

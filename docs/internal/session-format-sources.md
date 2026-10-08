@@ -188,16 +188,23 @@ fixtures retain this field; missing identities remain source-local.
   Headless `claude -p`, entrypoint `sdk-cli`, writes no `turn_duration`.
   These records stay outside the stored messages.
 
+  Reverified 2026-10-08 against the Claude Code 2.1.293 executable. The duration
+  producer writes `pendingWorkflowCount` beside `pendingBackgroundAgentCount`
+  and omits both at zero. Completion requires both counts to be zero. Duration
+  parents can point to a system `stop_hook_summary`; full parsing resolves
+  system ancestry to the owning user or assistant record in the same branch.
+
 - **Incremental turn status (2026-10-07):** Each message line with entrypoint
   `cli`, version 2.1.259 or newer, and `isSidechain` false uses `turn_duration`
   to finish the turn. Full parsing requires a later duration in the same branch
-  with zero pending background agents. Forks use their own duration records.
+  with zero pending background agents and workflows. Forks use their own
+  duration records.
   That duration supersedes pending tool calls; truncation keeps precedence.
   Until completion, an `end_turn` gives `clean`. Older CLI,
   headless, sidechain, and unversioned lines keep the `end_turn` signal.
   Incremental parsing uses only appended lines. A duration-only tail uses its
-  own producer fields and gives `awaiting_user` at zero pending agents or
-  `clean` otherwise. System-only and result-only tails preserve stored status.
+  own producer fields and gives `awaiting_user` at zero pending agents and
+  workflows or `clean` otherwise. System-only and result-only tails preserve stored status.
   User replies give `clean`. Partial trailing lines wait for the next append.
   Reverified against the parser and sync
   fixtures in `TestClaudeTurnDuration`, `TestClaudeTurnDurationPrecedence`,

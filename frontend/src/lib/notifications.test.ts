@@ -348,6 +348,20 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
+  it("stops paging at ordinal zero when the listed message count is stale", async () => {
+    row.termination_status = "awaiting_user";
+    await start();
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ ordinal: 0, role: "system", is_system: true })],
+      count: 1,
+    });
+    await change({ message_count: 4 });
+    expect(messages).toHaveBeenCalledExactlyOnceWith(
+      { id: "session" },
+      { direction: "desc", limit: 2 },
+    );
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
   it.each([{ role: "user" }, { is_system: true }])(
     "ignores a waiting append without a new assistant message: %j",
     async (patch) => {

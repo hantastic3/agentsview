@@ -15,8 +15,8 @@ The latest release is
   for you, for providers that store a waiting state, including Claude Code. Enable
   notifications in Settings.
   The first refresh, subagents, automated sessions, and the focused session
-  stay silent. A full re-import that relabels an old session or a restore of a
-  recently finished session can toast. Missed updates arrive within five minutes
+  stay silent. A full re-import that relabels an old session can toast; restored
+  sessions stay silent. Missed updates arrive within five minutes
   while the app runs.
 
 ## 0.45.0

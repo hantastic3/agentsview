@@ -128,6 +128,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
               );
               remaining -= result.messages.length;
               from = result.messages[result.messages.length - 1]!.ordinal - 1;
+              if (from < 0) break;
             }
           }
           if (turnEnd) {

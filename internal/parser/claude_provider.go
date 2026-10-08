@@ -365,12 +365,12 @@ func (p *claudeProvider) ParseIncremental(
 		return IncrementalOutcome{ForceReplace: true},
 			IncrementalNeedsFullParse, nil
 	}
-	var turnDuration claudeTurnDuration
+	var termination *TerminationStatus
 	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
 		path,
 		req.Offset,
 		claudeIncrementalScan{
-			turnDuration:  &turnDuration,
+			termination:   &termination,
 			startOrdinal:  req.StartOrdinal,
 			lastEntryUUID: req.LastEntryUUID,
 			stored: claudeStoredIdentity{
@@ -395,7 +395,6 @@ func (p *claudeProvider) ParseIncremental(
 		}
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
-	termination := turnDuration.status
 	if len(newMsgs) == 0 {
 		if consumed > 0 {
 			return IncrementalOutcome{
