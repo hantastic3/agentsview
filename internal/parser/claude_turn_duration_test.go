@@ -56,6 +56,12 @@ func TestClaudeTurnDuration(t *testing.T) {
 			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
+			name: "deferred duration after stored prompt with queued notification", fullParseAt: 1, producer: `"entrypoint":"cli","version":"2.1.293",`,
+			initial: initial,
+			tails:   []string{testjsonl.ClaudeQueuedCommandJSON("<task-notification>agent finished</task-notification>", tsEarlyS2) + "\n" + duration, answer + duration},
+			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
 			name:    "duration finishes stored tool result",
 			initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n" + `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-a","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n" + `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n",
 			tails:   []string{duration}, want: []TerminationStatus{TerminationAwaitingUser},

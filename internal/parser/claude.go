@@ -1095,15 +1095,12 @@ func claudeParseSessionFrom(
 		entries = mergeClaudeAssistantMessageChunks(entries)
 	}
 
-	// A rename-only append produces no entries and no queued commands, so
-	// the empty-entries early return below would silently succeed. Check
-	// first and force a full parse so the display name is persisted.
+	// A rename-only append needs a full parse to persist the display name.
 	if sawRename {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
-	// An appended ai-title is not an entry either, so the same
-	// empty-entries early return would consume it and silently drop the
-	// generated title. Escalate only while the title could still fill an
+	// An appended ai-title needs a full parse to persist the generated title.
+	// Escalate only while the title could still fill an
 	// empty stored session_name: the producer repeats the record (mean
 	// 15.96 per transcript, maximum 454 for one distinct value), so a
 	// session that already carries its title must not force a replacing
@@ -1148,17 +1145,6 @@ func claudeParseSessionFrom(
 			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 		}
 	}
-	if len(entries) == 0 && len(queuedCommands) == 0 {
-		// Duration-only tails need the stored message to rule out an unanswered prompt.
-		if turnDuration.line != "" && claudeStoredTailNeedsFullParse(path, offset, scan.lastEntryUUID) {
-			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
-		}
-		if scan.termination != nil {
-			*scan.termination = turnDuration.classifyTail(nil, nil)
-		}
-		return nil, links, latestTS, consumed, nil
-	}
-
 	// Fork detection only matters when the full parser would actually
 	// walk the DAG. parseLinear-bound files — multi-root or with
 	// unresolvable parents, which is every real CLI transcript whose
@@ -1221,6 +1207,11 @@ func claudeParseSessionFrom(
 				endedAt = qc.timestamp
 			}
 		}
+	}
+	// System-only or filtered tails need stored evidence to rule out an unanswered prompt.
+	if turnDuration.line != "" && !slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem }) &&
+		claudeStoredTailNeedsFullParse(path, offset, scan.lastEntryUUID) {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	// Use the latest timestamp from all lines (including
 	// non-message events) if it's later than what
