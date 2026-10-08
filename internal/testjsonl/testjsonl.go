@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// ClaudeProducerJSONL adds producer fields to each JSONL entry.
+func ClaudeProducerJSONL(content, producer string) string {
+	return "{" + producer + strings.ReplaceAll(content[1:], "\n{", "\n{"+producer)
+}
+
 // ClaudeUserJSON returns a Claude user message as a JSON string.
 func ClaudeUserJSON(
 	content, timestamp string, cwd ...string,

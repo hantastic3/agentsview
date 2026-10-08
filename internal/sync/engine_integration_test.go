@@ -18497,5 +18497,5 @@ func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 
 func claudeNotificationTranscript(content string) string {
 	const producer = `"entrypoint":"cli","version":"2.1.266",`
-	return "{" + producer + strings.ReplaceAll(content[1:], "\n{", "\n{"+producer)
+	return testjsonl.ClaudeProducerJSONL(content, producer)
 }

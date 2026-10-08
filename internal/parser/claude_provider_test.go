@@ -1042,7 +1042,7 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 		want       *TerminationStatus
 	}{
 		{name: "assistant end turn", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n", want: new(TerminationAwaitingUser)},
-		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: nil},
+		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: new(TerminationClean)},
 		{name: "incomplete tail", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"`, want: new(TerminationAwaitingUser)},
 		{name: "malformed complete line", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"` + "\n", want: new(TerminationAwaitingUser)},
 	} {

@@ -3,7 +3,6 @@ package parser
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,7 +76,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 			if producer == "" {
 				producer = `"entrypoint":"cli","version":"2.1.266",`
 			}
-			tc.initial = claudeTurnDurationProducer(tc.initial, producer)
+			tc.initial = testjsonl.ClaudeProducerJSONL(tc.initial, producer)
 			root := t.TempDir()
 			path := filepath.Join(root, "project", "session.jsonl")
 			writeSourceFile(t, path, tc.initial)
@@ -95,7 +94,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 			status := TerminationClean
 			waiting := 0
 			for i, tail := range tc.tails {
-				tail = claudeTurnDurationProducer(tail, producer)
+				tail = testjsonl.ClaudeProducerJSONL(tail, producer)
 				offset := int64(len(content))
 				content += tail
 				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
@@ -142,13 +141,9 @@ func TestClaudeTurnDurationPrecedence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content := testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n" + tc.tail
-			content = claudeTurnDurationProducer(content, `"entrypoint":"cli","version":"2.1.266",`)
+			content = testjsonl.ClaudeProducerJSONL(content, `"entrypoint":"cli","version":"2.1.266",`)
 			session, _ := runClaudeParserTest(t, "session.jsonl", content)
 			assert.Equal(t, tc.want, session.TerminationStatus)
 		})
 	}
-}
-
-func claudeTurnDurationProducer(content, producer string) string {
-	return "{" + producer + strings.ReplaceAll(content[1:], "\n{", "\n{"+producer)
 }
