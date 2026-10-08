@@ -1305,7 +1305,7 @@ earlier, alerts may pause while the window is hidden.
 Re-imported sessions can toast if the watcher still remembers their earlier
 state. A session that finishes while trashed can also toast after restoration
 and catch-up import. The app cannot distinguish that import from a later turn.
-Toasts follow the OS notification settings for agentsview.
+Toasts follow the OS notification settings for AgentsView.
 On platforms that report denied permission, the toggle stays off and shows how
 to allow notifications. Apps without the notification bridge show unavailable.
 
