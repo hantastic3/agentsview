@@ -87,6 +87,38 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("desktop notification watcher", () => {
+  it.each([
+    { is_system: true },
+    { is_compact_boundary: true },
+    { is_system: true, is_compact_boundary: true },
+  ])("ignores projected usage-only summary rows after a delivered reply: %j", async (markers) => {
+    row.termination_status = "awaiting_user";
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ ordinal: 1, content: "" })],
+      count: 1,
+    });
+    await start();
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ ordinal: 2, content: "" })],
+      count: 1,
+    });
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ ordinal: 3, content: "", ...markers })],
+      count: 1,
+    });
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ ordinal: 4, content: "" })],
+      count: 1,
+    });
+    await change({ message_count: 5 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
+  });
   it("remembers a focused completion before a system-only usage archive append", async () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);

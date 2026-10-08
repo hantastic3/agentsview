@@ -123,7 +123,10 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
               );
               if (!result.messages.length) break;
               const assistant = result.messages.find(
-                (message) => !message.is_system && message.role === "assistant",
+                (message) =>
+                  !message.is_system &&
+                  !message.is_compact_boundary &&
+                  message.role === "assistant",
               );
               if (assistant) {
                 turnEnd ||= !!previous && assistant.ordinal > previous.assistant_ordinal;

@@ -134,8 +134,8 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	require.NoError(t, database.ReplaceSessionMessages(t.Context(), session.ID, []Message{
 		{SessionID: session.ID, Ordinal: 0, Role: "user", Content: privatePrompt},
 		{SessionID: session.ID, Ordinal: 1, Role: "tool", Content: "private tool output"},
-		{SessionID: session.ID, Ordinal: 2, Role: "assistant", Model: "model-a", Content: "private response"},
-		{SessionID: session.ID, Ordinal: 3, Role: "assistant", Model: "model-a", Content: "private billed response", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":2}`)},
+		{SessionID: session.ID, Ordinal: 2, Role: "assistant", Model: "model-a", Content: "private response", IsSystem: true},
+		{SessionID: session.ID, Ordinal: 3, Role: "assistant", Model: "model-a", Content: "private billed response", IsCompactBoundary: true, TokenUsage: []byte(`{"input_tokens":10,"output_tokens":2}`)},
 	}))
 	require.NoError(t, database.UpdateSessionSignals(t.Context(),
 		session.ID, SessionSignalUpdate{
@@ -157,6 +157,13 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	))
 
 	assertUsageOnlyStoredSession(t, database, session.ID, []int{2, 3})
+	rows, err := database.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.True(t, rows[0].IsSystem)
+	assert.False(t, rows[0].IsCompactBoundary)
+	assert.False(t, rows[1].IsSystem)
+	assert.True(t, rows[1].IsCompactBoundary)
 	replacementTitle := "title added after the initial import"
 	require.NoError(t, database.RefreshSessionName(t.Context(), session.ID, &replacementTitle))
 	require.NoError(t, database.RenameSession(t.Context(), session.ID, &replacementTitle))
@@ -774,7 +781,7 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 			{SessionID: "archived", Ordinal: 0, Role: "user", Content: prompt},
 			{
 				SessionID: "archived", Ordinal: 1, Role: "assistant",
-				Model: "model-a", HasToolUse: true,
+				Model: "model-a", HasToolUse: true, IsSystem: true,
 				Content:    "listing files\n[Bash]\n$ ls /private",
 				TokenUsage: []byte(`{"input_tokens":10,"output_tokens":2}`),
 				ToolCalls: []ToolCall{{
@@ -789,7 +796,7 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 			},
 			{
 				SessionID: "archived", Ordinal: 2, Role: "assistant",
-				Model: "model-a", Content: "delegating", HasToolUse: true,
+				Model: "model-a", Content: "delegating", HasToolUse: true, IsCompactBoundary: true,
 				ToolCalls: []ToolCall{{
 					ToolName: "Agent", Category: "Task", ToolUseID: "tool-use-2",
 					InputJSON:         `{"prompt":"private delegated prompt"}`,
@@ -970,6 +977,10 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, messages, 2)
 		assert.Equal(t, []int{1, 2}, []int{messages[0].Ordinal, messages[1].Ordinal})
+		assert.True(t, messages[0].IsSystem)
+		assert.False(t, messages[0].IsCompactBoundary)
+		assert.False(t, messages[1].IsSystem)
+		assert.True(t, messages[1].IsCompactBoundary)
 		assert.Empty(t, messages[0].Content)
 		assert.Empty(t, messages[1].Content)
 		pins, err := destination.ListPinnedMessages(t.Context(), "archived", "")
