@@ -99,7 +99,7 @@ it("shows OS notification settings guidance and keeps the saved toggle on load",
   const { getByRole, getByText, queryByRole } = render(NotificationsSettings);
   expect(
     getByText(
-      "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for agentsview.",
+      "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for AgentsView.",
     ),
   ).toBeTruthy();
   await waitFor(() =>

@@ -2469,7 +2469,7 @@
   "settings_notifications_unavailable": "Las notificaciones de escritorio no están disponibles en esta aplicación.",
   "settings_notifications_permission_denied": "Se denegó el permiso de notificaciones. Permite las notificaciones de AgentsView en los ajustes del sistema.",
   "settings_notifications_enable": "Activar notificaciones de escritorio",
-  "settings_notifications_turn_end_hint": "Solo en la aplicación de escritorio. Recibes una notificación cuando el agente termina su turno y espera tu entrada. Las notificaciones siguen los ajustes de notificaciones del sistema operativo para agentsview.",
+  "settings_notifications_turn_end_hint": "Solo en la aplicación de escritorio. Recibes una notificación cuando el agente termina su turno y espera tu entrada. Las notificaciones siguen los ajustes de notificaciones del sistema operativo para AgentsView.",
   "notification_turn_end_body": "El agente terminó este turno y espera tu entrada.",
   "notification_turn_end_title_suffix": "{name}: turno terminado"
 }

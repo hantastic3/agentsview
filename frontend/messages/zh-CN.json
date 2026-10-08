@@ -2384,7 +2384,7 @@
   "settings_notifications_unavailable": "此应用无法使用桌面通知。",
   "settings_notifications_permission_denied": "通知权限被拒绝。请在系统设置中允许 AgentsView 发送通知。",
   "settings_notifications_enable": "启用桌面通知",
-  "settings_notifications_turn_end_hint": "仅限桌面应用。代理结束回合并等待你输入时发送通知。 通知遵循操作系统中 agentsview 的通知设置。",
+  "settings_notifications_turn_end_hint": "仅限桌面应用。代理结束回合并等待你输入时发送通知。通知遵循操作系统中 AgentsView 的通知设置。",
   "notification_turn_end_body": "Agent 已完成本回合，正在等待你的输入。",
   "notification_turn_end_title_suffix": "{name}: 回合已完成"
 }

@@ -2467,7 +2467,7 @@
   "settings_notifications_unavailable": "Desktop notifications are unavailable in this app.",
   "settings_notifications_permission_denied": "Notification permission was denied. Allow notifications for AgentsView in your system settings.",
   "settings_notifications_enable": "Enable desktop notifications",
-  "settings_notifications_turn_end_hint": "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for agentsview.",
+  "settings_notifications_turn_end_hint": "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for AgentsView.",
   "notification_turn_end_body": "The agent finished this turn and is waiting for you.",
   "notification_turn_end_title_suffix": "{name}: turn finished"
 }
