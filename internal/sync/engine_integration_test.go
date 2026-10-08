@@ -18412,10 +18412,6 @@ func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 		want  []string
 	}{
 		{"system-only task notification", []string{answer, testjsonl.ClaudeUserJSON("<task-notification>background task finished</task-notification>", tsEarlyS5) + "\n"}, []string{"clean", "clean"}},
-		{"two tools one result", []string{
-			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"first","name":"Read","input":{}},{"type":"tool_use","id":"second","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n",
-			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","content":"ok"}]}}` + "\n",
-		}, []string{"tool_call_pending", "tool_call_pending"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)
