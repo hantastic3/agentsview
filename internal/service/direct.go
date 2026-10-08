@@ -296,6 +296,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
 		EachRow:              f.EachRow,
+		SkipTotal:            f.SkipTotal,
 		IncludeSource:        f.IncludeSource,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,

@@ -207,6 +207,34 @@ func TestSessionFilterEachRowActiveSince(t *testing.T) {
 	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
 	filter := SessionFilter{EachRow: true, ActiveSince: "2024-06-03T00:00:00Z"}
 	requireSessions(t, d, filter, []string{"fork", "continuation", "subagent"})
+	for _, tt := range []struct {
+		name      string
+		skipTotal bool
+		wantTotal int
+	}{
+		{name: "counted", wantTotal: 3},
+		{name: "skip total", skipTotal: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := filter
+			f.SkipTotal = tt.skipTotal
+			f.Limit = 1
+			var ids []string
+			for range 3 {
+				page, err := d.ListSessions(t.Context(), f)
+				require.NoError(t, err)
+				require.Len(t, page.Sessions, 1)
+				assert.Equal(t, tt.wantTotal, page.Total)
+				ids = append(ids, page.Sessions[0].ID)
+				f.Cursor = page.NextCursor
+				if len(ids) < 3 {
+					require.NotEmpty(t, f.Cursor)
+				}
+			}
+			assert.Empty(t, f.Cursor)
+			assert.ElementsMatch(t, []string{"fork", "continuation", "subagent"}, ids)
+		})
+	}
 }
 
 func TestSessionFilterMinUserMessages(t *testing.T) {

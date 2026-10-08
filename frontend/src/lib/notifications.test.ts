@@ -165,6 +165,7 @@ describe("desktop notification watcher", () => {
       expect(list.mock.calls[0]![0]).toMatchObject({
         active_since: "2026-10-07T11:50:00.000Z",
         each_row: true,
+        skip_total: true,
         include_one_shot: true,
       });
       expect(list.mock.calls[0]![0]?.include_children).toBeUndefined();
@@ -256,7 +257,12 @@ describe("desktop notification watcher", () => {
     list.mockResolvedValueOnce({ sessions: [], total: 1, next_cursor: "page2" });
     row.termination_status = "awaiting_user";
     await start();
-    expect(list.mock.calls[1]![0]?.cursor).toBe("page2");
+    expect(list.mock.calls[0]![0]).toMatchObject({ each_row: true, skip_total: true });
+    expect(list.mock.calls[1]![0]).toMatchObject({
+      cursor: "page2",
+      each_row: true,
+      skip_total: true,
+    });
     await change();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });

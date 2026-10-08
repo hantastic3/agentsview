@@ -16467,6 +16467,9 @@ type GetAPIV1SessionsQuery struct {
 	// EachRow Apply filters to each session row, children included, without grouping by root
 	EachRow *bool `json:"each_row,omitempty"`
 
+	// SkipTotal Skip counting matches and return total as zero; pagination is unchanged
+	SkipTotal *bool `json:"skip_total,omitempty"`
+
 	// Ids Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
 	Ids *string `json:"ids,omitempty"`
 }

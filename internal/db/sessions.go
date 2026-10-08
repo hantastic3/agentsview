@@ -570,6 +570,7 @@ type SessionFilter struct {
 	AutomatedScope     string   // "", "human", "all", or "automated"
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	EachRow            bool     // apply filters to each row, including children
+	SkipTotal          bool     // skip counting matches; total is zero
 	IncludeEmpty       bool     // include zero-message sessions for project mapping
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
 	IncludeSource      bool     // include the session source file path in list rows
@@ -711,12 +712,14 @@ func (db *DB) ListSessions(
 		if err != nil {
 			return SessionPage{}, err
 		}
-		total = cur.Total
+		if !f.SkipTotal {
+			total = cur.Total
+		}
 	}
 	// Total count applies filters but not cursor. To avoid
 	// re-counting on every pagination request, newer cursors carry
 	// the first-page total and we reuse it here.
-	if total <= 0 {
+	if !f.SkipTotal && total <= 0 {
 		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
 		if err := db.getReader().QueryRowContext(
 			ctx, countQuery, args...,

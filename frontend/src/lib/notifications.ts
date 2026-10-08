@@ -86,6 +86,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         const result = await SessionsService.getApiV1Sessions({
           active_since: new Date(fetchedAt - FRESHNESS_MS).toISOString(),
           each_row: true,
+          skip_total: true,
           include_one_shot: true,
           cursor,
         });

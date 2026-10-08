@@ -366,10 +366,12 @@ func (s *Store) ListSessions(
 		if err != nil {
 			return db.SessionPage{}, err
 		}
-		total = cur.Total
+		if !f.SkipTotal {
+			total = cur.Total
+		}
 	}
 
-	if total <= 0 {
+	if !f.SkipTotal && total <= 0 {
 		countQ := "SELECT COUNT(*) FROM sessions WHERE " +
 			where
 		if err := s.pg.QueryRowContext(
