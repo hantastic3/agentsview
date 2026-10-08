@@ -149,6 +149,7 @@ func claudeParseFile(
 		subagentMap      = map[string]string{}
 		globalStart      time.Time
 		globalEnd        time.Time
+		turnDuration     claudeTurnDuration
 	)
 	allHaveUUID = true
 	if !opts.uploadIdentity {
@@ -304,6 +305,7 @@ func claudeParseFile(
 		// Handle system records. /rename local commands update the
 		// display name; last rename wins (empty arg clears it).
 		if entryType == "system" {
+			turnDuration.observe(string(lineBytes), lineIndex)
 			if name, ok := extractRenameName(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
@@ -507,9 +509,9 @@ func claudeParseFile(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		results[i].Session.TerminationStatus = Classify(
+		results[i].Session.TerminationStatus = classifyClaudeTermination(
 			results[i].Messages,
-			lastAssistantStopReason(results[i].Messages),
+			entries, turnDuration,
 			lastLineFailed,
 		)
 		results[i].Session.claudeRenameSeen = renameSeen
@@ -741,6 +743,69 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 	return ""
 }
 
+type claudeTurnDuration struct {
+	seen     bool
+	position int
+	pending  int64
+	status   *TerminationStatus
+}
+
+func (d *claudeTurnDuration) observe(line string, position int) {
+	if gjson.Get(line, "subtype").Str == "turn_duration" {
+		d.seen = true
+		d.position = position
+		d.pending = gjson.Get(line, "pendingBackgroundAgentCount").Int()
+	}
+}
+
+func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, duration claudeTurnDuration, truncated bool) TerminationStatus {
+	status := Classify(messages, lastAssistantStopReason(messages), truncated)
+	if !duration.seen || status == TerminationTruncated || status == TerminationToolCallPending {
+		return status
+	}
+	for _, msg := range slices.Backward(messages) {
+		if msg.IsSystem {
+			continue
+		}
+		if msg.Role != RoleAssistant {
+			return TerminationClean
+		}
+		for _, entry := range slices.Backward(entries) {
+			if entry.entryType == "assistant" && entry.uuid == msg.SourceUUID && !gjson.Get(entry.line, "isCompactSummary").Bool() {
+				if duration.position > entry.lineIndex && duration.pending == 0 {
+					return TerminationAwaitingUser
+				}
+				return TerminationClean
+			}
+		}
+		return TerminationClean
+	}
+	if duration.pending > 0 {
+		return TerminationClean
+	}
+	return TerminationAwaitingUser
+}
+
+func claudeHasTurnDuration(ctx context.Context, path string, offset int64) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	lr := newLineReaderContext(ctx, io.LimitReader(f, offset), maxLineSize)
+	defer releaseLineReader(lr)
+	for {
+		line, ok := lr.next()
+		if !ok {
+			break
+		}
+		if gjson.Valid(line) && gjson.Get(line, "type").Str == "system" && gjson.Get(line, "subtype").Str == "turn_duration" {
+			return true, nil
+		}
+	}
+	return false, lr.Err()
+}
+
 // claudeParseSessionFrom parses only new lines from a Claude JSONL
 // file starting at the given byte offset. Returns only the newly
 // parsed messages (with ordinals starting at startOrdinal) and the
@@ -783,6 +848,7 @@ type claudeStoredIdentity struct {
 // claudeIncrementalScan carries the per-session stored state an
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
+	turnDuration  *claudeTurnDuration
 	startOrdinal  int
 	lastEntryUUID string
 	stored        claudeStoredIdentity
@@ -860,6 +926,9 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "system" {
+				if scan.turnDuration != nil {
+					scan.turnDuration.observe(line, lineIndex)
+				}
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
 				); ok {
@@ -981,6 +1050,9 @@ func claudeParseSessionFrom(
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
+		if scan.turnDuration != nil && scan.turnDuration.seen {
+			scan.turnDuration.status = new(classifyClaudeTermination(nil, nil, *scan.turnDuration, false))
+		}
 		return nil, links, latestTS, consumed, nil
 	}
 
@@ -1052,6 +1124,17 @@ func claudeParseSessionFrom(
 	// extractMessagesFrom found.
 	if latestTS.After(endedAt) {
 		endedAt = latestTS
+	}
+	if scan.turnDuration != nil {
+		for _, msg := range msgs {
+			if msg.Role == RoleAssistant && !msg.IsSystem {
+				scan.turnDuration.status = new(classifyClaudeTermination(msgs, entries, *scan.turnDuration, false))
+				break
+			}
+		}
+		if scan.turnDuration.status == nil && scan.turnDuration.seen {
+			scan.turnDuration.status = new(classifyClaudeTermination(msgs, entries, *scan.turnDuration, false))
+		}
 	}
 	return msgs, links, endedAt, consumed, nil
 }

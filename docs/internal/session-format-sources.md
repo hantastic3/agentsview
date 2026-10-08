@@ -176,19 +176,32 @@ fixtures retain this field; missing identities remain source-local.
   identities and usage, then checks actual parsed counts. These synthetic
   records are a measured subset, not an authoritative or exhaustive schema.
 
-- **Incremental turn status (2026-10-07):** Rechecked `message.stop_reason`
-  against the stored Claude fixtures, full parser, and incremental tail tests.
-  A tail containing a non-system assistant message uses
-  `Classify` and its last assistant `stop_reason`. In fixtures, `end_turn`
-  means `awaiting_user` when the assistant is last. Result-only tails return no
-  verdict and preserve pending tool status. User-only tails return no verdict,
-  clearing stored status when the message count changes. Empty tool-result
-  carriers are filtered before storage and keep the count and status unchanged.
-  Metadata-only and system-only tails keep the stored status, including
-  task-notification envelopes that add stored rows. Reverified with
-  `TestIncrementalSync_ClaudeTurnStatusTails` and
-  `TestWriteSessionIncrementalSystemOnlyStatus`. Partial trailing lines wait for
-  the next append without overriding the verdict from complete messages.
+- **Turn completion evidence (2026-10-07):** Verified interactive Claude Code
+  transcripts, entrypoint `cli`, versions 2.1.259 through 2.1.266, write
+  `system/turn_duration` after the final `stop_hook_summary`. A blocked Stop
+  hook writes assistant `end_turn`, user `Stop hook feedback`, and
+  `stop_hook_summary` with `hookErrors`, without a `turn_duration`. An allowed
+  stop then writes another `end_turn`, a successful hook summary, and
+  `turn_duration`. Background-agent turns record
+  `pendingBackgroundAgentCount`, for example 8, then a task notification,
+  `end_turn`, and another duration with 7 pending. The count is absent at zero.
+  Headless `claude -p`, entrypoint `sdk-cli`, writes no `turn_duration`.
+  These records stay outside the stored messages.
+
+- **Incremental turn status (2026-10-07):** Once a transcript contains
+  `turn_duration`, `awaiting_user` requires a duration after its last assistant
+  message with zero background agents pending. Until then the status is
+  `clean`; truncation and pending tool calls retain precedence. Full parsing
+  tracks record order. Incremental parsing also returns a verdict for
+  duration-only tails and checks the prefix for the first duration when an
+  appended `end_turn` has none. Transcripts with no duration retain the
+  `end_turn` signal, including older CLI and headless sessions. Result-only
+  tails preserve pending tool status. User-only tails clear stored status when
+  the message count changes. Other metadata and system-only tails preserve
+  status, including task notifications. Partial trailing lines wait for the
+  next append. Covered by `TestClaudeTurnDuration`,
+  `TestClaudeTurnDurationPrecedence`, `TestIncrementalSync_ClaudeTurnDuration`,
+  and `TestIncrementalSync_ClaudeTurnStatusTails`.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.

@@ -18399,6 +18399,54 @@ func TestIncrementalSync_ClaudeEndTurnUpdatesTermination(t *testing.T) {
 	assert.Equal(t, "done", after[1].Content)
 }
 
+func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
+	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
+	const duration = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}` + "\n"
+	const pending = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000,"pendingBackgroundAgentCount":2}` + "\n"
+	for _, tc := range []struct {
+		name  string
+		tails []string
+		want  []string
+	}{
+		{
+			"blocked then allowed stop",
+			[]string{answer, testjsonl.ClaudeUserJSON("Stop hook feedback: keep working", tsEarlyS5) + "\n", `{"type":"system","subtype":"stop_hook_summary","hookErrors":["blocked"]}` + "\n", answer, `{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}` + "\n", duration},
+			[]string{"clean", "clean", "clean", "clean", "clean", "awaiting_user"},
+		},
+		{
+			"background agents",
+			[]string{answer, pending, testjsonl.ClaudeUserJSON("<task-notification>agent finished</task-notification>", tsEarlyS5) + "\n", answer, duration},
+			[]string{"clean", "clean", "clean", "clean", "awaiting_user"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)) + answer + duration + testjsonl.ClaudeUserJSON("continue", tsEarlyS5) + "\n"
+			path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
+			env.engine.SyncAll(t.Context(), nil)
+			waiting := 0
+			for i, tail := range tc.tails {
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+				require.NoError(t, err)
+				_, err = f.WriteString(tail)
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				env.engine.SyncPaths([]string{path})
+				session, err := env.db.GetSessionFull(t.Context(), "notify")
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				require.NotNil(t, session.TerminationStatus)
+				assert.Equal(t, tc.want[i], *session.TerminationStatus, "record %d", i)
+				assert.True(t, session.LastWriteIncremental)
+				if *session.TerminationStatus == "awaiting_user" {
+					waiting++
+				}
+			}
+			assert.Equal(t, 1, waiting)
+		})
+	}
+}
+
 func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
 	const duration = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}` + "\n"

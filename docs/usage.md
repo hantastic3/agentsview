@@ -1301,6 +1301,9 @@ you, including forks and continuations. History, restores, subagents, automated
 sessions, and the session in a focused window stay silent. Missed updates arrive
 within five minutes while the app runs. Toasts follow the OS notification
 settings for agentsview.
+For Claude transcripts that record `turn_duration`, toasts wait until Stop
+hooks finish and no background agents remain pending. Older and headless
+transcripts use the assistant's `end_turn` signal.
 On platforms that report denied permission, the toggle stays off and shows how
 to allow notifications. Apps without the notification bridge show unavailable.
 

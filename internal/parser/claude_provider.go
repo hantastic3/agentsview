@@ -365,10 +365,12 @@ func (p *claudeProvider) ParseIncremental(
 		return IncrementalOutcome{ForceReplace: true},
 			IncrementalNeedsFullParse, nil
 	}
+	var turnDuration claudeTurnDuration
 	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
 		path,
 		req.Offset,
 		claudeIncrementalScan{
+			turnDuration:  &turnDuration,
 			startOrdinal:  req.StartOrdinal,
 			lastEntryUUID: req.LastEntryUUID,
 			stored: claudeStoredIdentity{
@@ -393,27 +395,30 @@ func (p *claudeProvider) ParseIncremental(
 		}
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
+	termination := turnDuration.status
+	if !turnDuration.seen && termination != nil && *termination == TerminationAwaitingUser {
+		seen, err := claudeHasTurnDuration(ctx, path, req.Offset)
+		if err != nil {
+			return IncrementalOutcome{}, IncrementalNeedsFullParse, err
+		}
+		if seen {
+			termination = new(TerminationClean)
+		}
+	}
 	if len(newMsgs) == 0 {
 		if consumed > 0 {
 			return IncrementalOutcome{
-				SessionID:     req.SessionID,
-				SubagentLinks: links,
-				EndedAt:       endedAt,
-				ConsumedBytes: consumed,
+				TerminationStatus: termination,
+				SessionID:         req.SessionID,
+				SubagentLinks:     links,
+				EndedAt:           endedAt,
+				ConsumedBytes:     consumed,
 			}, IncrementalApplied, nil
 		}
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
 	}
 	if req.StoredUserMessageCount == 0 && req.StoredSessionKind == "" && req.StoredEntrypoint == "sdk-cli" && slices.ContainsFunc(newMsgs, isRealClaudeUserMessage) {
 		return IncrementalOutcome{ForceReplace: true}, IncrementalNeedsFullParse, nil
-	}
-	var termination *TerminationStatus
-	for _, msg := range newMsgs {
-		if msg.Role == RoleAssistant && !msg.IsSystem {
-			status := Classify(newMsgs, lastAssistantStopReason(newMsgs), false)
-			termination = &status
-			break
-		}
 	}
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx := claudeProviderTokenTotals(newMsgs)
 	return IncrementalOutcome{

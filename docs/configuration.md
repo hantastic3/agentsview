@@ -239,6 +239,10 @@ zoom_level = 120
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                                                                                                                                                                                                                                                |
 
+Claude transcripts that record `turn_duration` trigger toasts after Stop hooks
+finish, with no background agents pending. Older and headless transcripts use
+the assistant's `end_turn` signal.
+
 The `cursor_secret` is generated automatically on first run. For Gist
 publishing, AgentsView first uses a saved `github_token`. For local browser
 requests, if no token is saved, it then tries `AGENTSVIEW_GITHUB_TOKEN` and then
