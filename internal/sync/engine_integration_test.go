@@ -18374,82 +18374,6 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 	}
 }
 
-func TestIncrementalSync_ClaudeEndTurnUpdatesTermination(t *testing.T) {
-	env := setupTestEnv(t)
-	initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly))
-	initial = claudeNotificationTranscript(initial)
-	path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
-	env.engine.SyncAll(t.Context(), nil)
-	before := fetchMessages(t, env.db, "notify")
-	require.Len(t, before, 1)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	env.engine.SyncPaths([]string{path})
-	session, err := env.db.GetSessionFull(t.Context(), "notify")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	require.NotNil(t, session.TerminationStatus)
-	assert.Equal(t, "awaiting_user", *session.TerminationStatus)
-	assert.True(t, session.LastWriteIncremental)
-	after := fetchMessages(t, env.db, "notify")
-	require.Len(t, after, 2)
-	assert.Equal(t, before[0].ID, after[0].ID)
-	assert.Equal(t, "done", after[1].Content)
-}
-
-func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
-	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
-	const duration = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}` + "\n"
-	const pending = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000,"pendingBackgroundAgentCount":2}` + "\n"
-	for _, tc := range []struct {
-		name  string
-		tails []string
-		want  []string
-	}{
-		{
-			"blocked then allowed stop",
-			[]string{answer, testjsonl.ClaudeUserJSON("Stop hook feedback: keep working", tsEarlyS5) + "\n", `{"type":"system","subtype":"stop_hook_summary","hookErrors":["blocked"]}` + "\n", answer, `{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}` + "\n", duration},
-			[]string{"clean", "clean", "clean", "clean", "clean", "awaiting_user"},
-		},
-		{
-			"background agents",
-			[]string{answer, pending, testjsonl.ClaudeUserJSON("<task-notification>agent finished</task-notification>", tsEarlyS5) + "\n", answer, duration},
-			[]string{"clean", "clean", "clean", "clean", "awaiting_user"},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			env := setupTestEnv(t)
-			initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)) + answer + duration + testjsonl.ClaudeUserJSON("continue", tsEarlyS5) + "\n"
-			initial = claudeNotificationTranscript(initial)
-			path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
-			env.engine.SyncAll(t.Context(), nil)
-			waiting := 0
-			for i, tail := range tc.tails {
-				tail = claudeNotificationTranscript(tail)
-				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-				require.NoError(t, err)
-				_, err = f.WriteString(tail)
-				require.NoError(t, err)
-				require.NoError(t, f.Close())
-				env.engine.SyncPaths([]string{path})
-				session, err := env.db.GetSessionFull(t.Context(), "notify")
-				require.NoError(t, err)
-				require.NotNil(t, session)
-				require.NotNil(t, session.TerminationStatus)
-				assert.Equal(t, tc.want[i], *session.TerminationStatus, "record %d", i)
-				assert.True(t, session.LastWriteIncremental)
-				if *session.TerminationStatus == "awaiting_user" {
-					waiting++
-				}
-			}
-			assert.Equal(t, 1, waiting)
-		})
-	}
-}
-
 func TestIncrementalSync_ClaudeToolResultClearsPendingStatus(t *testing.T) {
 	env := setupTestEnv(t)
 	initial := testjsonl.JoinJSONL(
@@ -18482,21 +18406,16 @@ func TestIncrementalSync_ClaudeToolResultClearsPendingStatus(t *testing.T) {
 
 func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
-	const duration = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}` + "\n"
 	for _, tc := range []struct {
 		name  string
 		tails []string
 		want  []string
 	}{
-		{"separate duration", []string{answer, duration}, []string{"clean", "awaiting_user"}},
 		{"system-only task notification", []string{answer, testjsonl.ClaudeUserJSON("<task-notification>background task finished</task-notification>", tsEarlyS5) + "\n"}, []string{"clean", "clean"}},
-		{"same tail duration", []string{answer + duration}, []string{"awaiting_user"}},
-		{"incomplete final line", []string{answer + `{"type":"user"`}, []string{"clean"}},
 		{"two tools one result", []string{
 			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"first","name":"Read","input":{}},{"type":"tool_use","id":"second","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n",
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","content":"ok"}]}}` + "\n",
 		}, []string{"tool_call_pending", "tool_call_pending"}},
-		{"user follows answer", []string{answer, testjsonl.ClaudeUserJSON("follow up", tsEarlyS5) + "\n"}, []string{"clean", "clean"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)

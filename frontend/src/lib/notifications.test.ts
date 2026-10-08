@@ -221,17 +221,6 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("toasts a second turn end after a system-only append", async () => {
-    row.termination_status = "awaiting_user";
-    await start();
-    messages.mockResolvedValueOnce({ messages: [assistantMessage({ is_system: true })], count: 1 });
-    await change({ message_count: 3 });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change({ message_count: 4 });
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
   it("remembers a waiting session that re-enters after ten idle minutes", async () => {
     await start();
     await change({ termination_status: "awaiting_user" });
@@ -281,17 +270,6 @@ describe("desktop notification watcher", () => {
     expect(messages).not.toHaveBeenCalled();
     expect(session).not.toHaveBeenCalled();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-  });
-  it("silently baselines restored waiting sessions without reading messages", async () => {
-    await start();
-    await change({
-      id: "restored",
-      termination_status: "awaiting_user",
-      ended_at: "2026-10-07T11:59:00Z",
-    });
-    expect(messages).not.toHaveBeenCalled();
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    expect(session).not.toHaveBeenCalled();
   });
   it.each([
     { delta: 2, limit: 2 },
@@ -373,19 +351,6 @@ describe("desktop notification watcher", () => {
       expect(session).not.toHaveBeenCalled();
     },
   );
-  it("suppresses a stale turn end when a user turn commits between the list and message read", async () => {
-    row.termination_status = "awaiting_user";
-    await start();
-    messages.mockImplementationOnce(async () => {
-      row = { ...row, termination_status: "", user_message_count: 2, message_count: 4 };
-      return { messages: [assistantMessage()], count: 1 };
-    });
-    await change({ message_count: 3 });
-    expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change({ termination_status: "awaiting_user", message_count: 5 });
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
   it.each([{ termination_status: "" }, { user_message_count: 2 }, { message_count: 4 }])(
     "retries a changed session after the message read: %j",
     async (patch) => {

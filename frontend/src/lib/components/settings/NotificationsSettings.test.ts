@@ -89,14 +89,19 @@ it("keeps notifications off and explains denied permission", async () => {
   expect((enabled() as HTMLInputElement).checked).toBe(false);
 });
 
-it("keeps the enabled toggle without a denied hint when permission reports false on load", async () => {
+it("shows OS notification settings guidance and keeps the saved toggle on load", async () => {
   settings.notifications.enabled = true;
   const plugin = {
     isPermissionGranted: vi.fn().mockResolvedValue(false),
     requestPermission: vi.fn(),
   };
   vi.stubGlobal("__TAURI__", { notification: plugin });
-  const { getByRole, queryByRole } = render(NotificationsSettings);
+  const { getByRole, getByText, queryByRole } = render(NotificationsSettings);
+  expect(
+    getByText(
+      "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for agentsview.",
+    ),
+  ).toBeTruthy();
   await waitFor(() =>
     expect(
       (getByRole("switch", { name: "Enable desktop notifications" }) as HTMLInputElement).checked,
@@ -129,18 +134,4 @@ it("explains an unavailable notification bridge", () => {
   expect(
     getByRole("switch", { name: "Enable desktop notifications" }).hasAttribute("disabled"),
   ).toBe(true);
-});
-
-it("shows OS notification settings guidance when desktop permission reports granted", async () => {
-  settings.notifications.enabled = true;
-  vi.stubGlobal("__TAURI__", {
-    notification: { isPermissionGranted: vi.fn().mockResolvedValue(true) },
-  });
-  const { getByText, queryByRole } = render(NotificationsSettings);
-  expect(
-    getByText(
-      "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for agentsview.",
-    ),
-  ).toBeTruthy();
-  expect(queryByRole("status")).toBeNull();
 });

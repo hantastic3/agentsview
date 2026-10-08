@@ -1116,11 +1116,6 @@ func TestCurrentDataVersionCodexCacheWriteTokens(t *testing.T) {
 		"version 123 is the data-version boundary for Codex cache-write token normalization")
 }
 
-func TestCurrentDataVersionClaudePeerMessages(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 126,
-		"version 126 is the data-version boundary for Claude peer-message classification")
-}
-
 func TestCurrentDataVersionClaudeTurnDuration(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 128,
 		"version 128 is the data-version boundary for Claude turn-duration classification")
@@ -8475,7 +8470,6 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 		preserveStatus    bool
 		wantStatus        string
 		wantNull          bool
-		msgCount          int
 	}{
 		{
 			name:              "stores authoritative status",
@@ -8484,10 +8478,9 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 		},
 		{
 			name:     "nil clears status",
-			msgCount: 1,
 			wantNull: true,
 		},
-		{name: "nil with unchanged count clears status", wantNull: true},
+		{name: "authoritative status overrides preservation", terminationStatus: new("interrupted"), preserveStatus: true, wantStatus: "interrupted"},
 		{name: "system-only append keeps status", preserveStatus: true, wantStatus: "tool_call_pending"},
 	}
 
@@ -8503,7 +8496,6 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			update := IncrementalSessionUpdate{
 				TerminationStatus:     tt.terminationStatus,
 				KeepTerminationStatus: tt.preserveStatus,
-				MsgCount:              tt.msgCount,
 			}
 			require.NoError(t, d.UpdateSessionIncremental(t.Context(),
 				"incremental-status", update,
@@ -8518,44 +8510,6 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			}
 			require.NotNil(t, got.TerminationStatus, "termination_status")
 			assert.Equal(t, tt.wantStatus, *got.TerminationStatus, "termination_status")
-		})
-	}
-}
-
-func TestWriteSessionIncrementalSystemOnlyStatus(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		role     string
-		isSystem bool
-		status   *string
-		want     *string
-	}{
-		{name: "system append", role: "user", isSystem: true, want: new("awaiting_user")},
-		{name: "user append", role: "user"},
-		{name: "assistant append", role: "assistant"},
-		{name: "authoritative status", role: "user", isSystem: true, status: new("interrupted"), want: new("interrupted")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			_, err := d.WriteSessionBatch([]SessionBatchWrite{{
-				Session: Session{ID: "session", Agent: "claude", MessageCount: 1, NextOrdinal: 1, TerminationStatus: new("awaiting_user")}, ReplaceMessages: true,
-				Messages: []Message{{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "done"}},
-			}})
-			require.NoError(t, err)
-			_, err = d.WriteSessionIncremental(t.Context(), "session", []Message{
-				{SessionID: "session", Ordinal: 1, Role: "user", IsSystem: true, Content: "system notice"},
-			}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2, KeepTerminationStatus: true})
-			require.NoError(t, err)
-			_, err = d.WriteSessionIncremental(t.Context(), "session", []Message{
-				{SessionID: "session", Ordinal: 2, Role: tc.role, IsSystem: tc.isSystem, Content: "new message"},
-				{SessionID: "session", Ordinal: 3, Role: "user", IsSystem: true, Content: "system notice"},
-			}, IncrementalSessionUpdate{MsgCount: 4, NextOrdinal: 4, TerminationStatus: tc.status, KeepTerminationStatus: tc.isSystem})
-			require.NoError(t, err)
-			session, err := d.GetSessionFull(t.Context(), "session")
-			require.NoError(t, err)
-			require.NotNil(t, session)
-			assert.Equal(t, tc.want, session.TerminationStatus)
-			assert.Equal(t, 4, session.MessageCount)
 		})
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -787,9 +788,20 @@ func (d *claudeTurnDuration) observe(line []byte, position int) {
 	if gjson.GetBytes(line, "subtype").Str == "turn_duration" {
 		d.line = string(line)
 		d.position = position
-		d.pending = gjson.GetBytes(line, "pendingBackgroundAgentCount").Int()
-		d.workflows = gjson.GetBytes(line, "pendingWorkflowCount").Int()
+		d.pending = claudePendingCount(gjson.GetBytes(line, "pendingBackgroundAgentCount"))
+		d.workflows = claudePendingCount(gjson.GetBytes(line, "pendingWorkflowCount"))
 	}
+}
+
+func claudePendingCount(count gjson.Result) int64 {
+	if !count.Exists() {
+		return 0
+	}
+	value, err := strconv.ParseInt(count.Raw, 10, 64)
+	if count.Type != gjson.Number || err != nil || value < 0 {
+		return -1
+	}
+	return value
 }
 
 func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, duration claudeTurnDuration, truncated bool) TerminationStatus {
@@ -918,6 +930,7 @@ func claudeParseSessionFrom(
 	var (
 		entries        []dagEntry
 		turnDuration   claudeTurnDuration
+		systemParents  = make(map[string]string)
 		queuedCommands []claudeQueuedCommand
 		subagentMap    = make(map[string]string)
 		lineIndex      = startOrdinal
@@ -957,6 +970,13 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "system" {
+				parent := gjson.Get(line, "parentUuid").Str
+				if ancestor, ok := systemParents[parent]; ok {
+					parent = ancestor
+				}
+				if uuid := gjson.Get(line, "uuid").Str; uuid != "" {
+					systemParents[uuid] = parent
+				}
 				turnDuration.observe([]byte(line), lineIndex)
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
@@ -1079,6 +1099,14 @@ func claudeParseSessionFrom(
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
+		parent := gjson.Get(turnDuration.line, "parentUuid").Str
+		if ancestor, ok := systemParents[parent]; ok {
+			parent = ancestor
+		}
+		// A parent outside this tail needs the full parser to resolve stored system ancestry.
+		if parent != "" && parent != scan.lastEntryUUID {
+			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		}
 		if scan.termination != nil {
 			*scan.termination = turnDuration.classifyTail(nil, nil)
 		}

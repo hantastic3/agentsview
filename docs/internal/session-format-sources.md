@@ -190,7 +190,8 @@ fixtures retain this field; missing identities remain source-local.
 
   Reverified 2026-10-08 against the Claude Code 2.1.293 executable. The duration
   producer writes `pendingWorkflowCount` beside `pendingBackgroundAgentCount`
-  and omits both at zero. Completion requires both counts to be zero. Duration
+  and omits both at zero. Completion requires absent or zero integer counts.
+  Negative or malformed counts keep the turn incomplete. Duration
   parents can point to a system `stop_hook_summary`; full parsing resolves
   system ancestry to the owning user or assistant record in the same branch.
 
@@ -204,11 +205,14 @@ fixtures retain this field; missing identities remain source-local.
   headless, sidechain, and unversioned lines keep the `end_turn` signal.
   Incremental parsing uses only appended lines. A duration-only tail uses its
   own producer fields and gives `awaiting_user` at zero pending agents and
-  workflows or `clean` otherwise. System-only and result-only tails preserve stored status.
+  workflows or `clean` otherwise. Its ancestry must reach the latest stored
+  message. An unresolved parent requires a full parse, which preserves the
+  current turn when the duration belongs to an older message. System-only
+  and result-only tails preserve stored status.
   User replies give `clean`. Partial trailing lines wait for the next append.
   Reverified against the parser and sync
   fixtures in `TestClaudeTurnDuration`, `TestClaudeTurnDurationPrecedence`,
-  `TestIncrementalSync_ClaudeTurnDuration`, and
+  `TestClaudeProviderIncrementalTermination`, and
   `TestIncrementalSync_ClaudeTurnStatusTails`.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with

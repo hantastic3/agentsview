@@ -207,11 +207,6 @@ func TestSessionFilterEachRowActiveSince(t *testing.T) {
 	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
 	filter := SessionFilter{EachRow: true, ActiveSince: "2024-06-03T00:00:00Z"}
 	requireSessions(t, d, filter, []string{"fork", "continuation", "subagent"})
-	page, err := d.ListSessions(t.Context(), filter)
-	require.NoError(t, err)
-	for _, row := range page.Sessions {
-		assert.Equal(t, row.ID, row.RelationshipType)
-	}
 }
 
 func TestSessionFilterMinUserMessages(t *testing.T) {

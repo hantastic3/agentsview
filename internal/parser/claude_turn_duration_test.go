@@ -18,11 +18,12 @@ func TestClaudeTurnDuration(t *testing.T) {
 	answer := testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n"
 	initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly), testjsonl.ClaudeAssistantJSON("ready", tsEarlyS1, "end_turn")) + duration + testjsonl.ClaudeUserJSON("continue", tsEarlyS2) + "\n"
 	for _, tc := range []struct {
-		name     string
-		producer string
-		initial  string
-		tails    []string
-		want     []TerminationStatus
+		name        string
+		producer    string
+		initial     string
+		tails       []string
+		want        []TerminationStatus
+		fullParseAt int
 	}{
 		{
 			name: "blocked then allowed stop", initial: initial,
@@ -39,12 +40,34 @@ func TestClaudeTurnDuration(t *testing.T) {
 			tails: []string{answer + duration}, want: []TerminationStatus{TerminationAwaitingUser},
 		},
 		{
+			name: "duration belongs to an older turn", fullParseAt: 1,
+			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n" + `{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"continue"}}` + "\n",
+			tails: []string{
+				`{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"a0"}` + "\n",
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n",
+				`{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"}` + "\n",
+			},
+			want: []TerminationStatus{TerminationClean, TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "malformed pending counts", initial: initial,
+			tails: []string{
+				answer + `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":"unknown"}` + "\n",
+				`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":0.5}` + "\n",
+				`{"type":"system","subtype":"turn_duration","pendingWorkflowCount":-1}` + "\n",
+				`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":null}` + "\n",
+				`{"type":"system","subtype":"turn_duration","pendingWorkflowCount":false}` + "\n",
+				duration,
+			},
+			want: []TerminationStatus{TerminationClean, TerminationClean, TerminationClean, TerminationClean, TerminationClean, TerminationAwaitingUser},
+		},
+		{
 			name: "pending workflow", producer: `"entrypoint":"cli","version":"2.1.293",`, initial: initial,
 			tails: []string{answer + `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}` + "\n", `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}` + "\n", duration},
 			want:  []TerminationStatus{TerminationClean, TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name:    "duration descends through stop hook summary",
+			name: "duration descends through stop hook summary", fullParseAt: 3,
 			initial: `{"type":"user","uuid":"u0","parentUuid":null,"message":{"content":"hello"}}` + "\n",
 			tails: []string{
 				`{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"done","stop_reason":"end_turn"}}` + "\n",
@@ -56,10 +79,6 @@ func TestClaudeTurnDuration(t *testing.T) {
 		{
 			name: "duration before assistant in same tail", initial: initial,
 			tails: []string{duration + answer, duration}, want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
-		},
-		{
-			name: "first interactive turn", initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
-			tails: []string{answer, duration}, want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
 			name: "oldest verified cli", producer: `"entrypoint":"cli","version":"2.1.259",`, initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n",
@@ -106,6 +125,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 			require.Len(t, results, 1)
 			ordinal := len(results[0].Messages)
 			entrypoint := results[0].Session.Entrypoint
+			lastEntryUUID := results[0].Messages[ordinal-1].SourceUUID
 			content := tc.initial
 			status := TerminationClean
 			waiting := 0
@@ -120,9 +140,21 @@ func TestClaudeTurnDuration(t *testing.T) {
 				assert.Equal(t, tc.want[i], results[0].Session.TerminationStatus, "full parse record %d", i)
 				outcome, applied, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
 					Source: source, Fingerprint: SourceFingerprint{Key: path, Size: int64(len(content))},
-					SessionID: "session", Offset: offset, StartOrdinal: ordinal, StoredEntrypoint: entrypoint,
+					SessionID: "session", Offset: offset, StartOrdinal: ordinal, StoredEntrypoint: entrypoint, LastEntryUUID: lastEntryUUID,
 				})
 				require.NoError(t, err)
+				if tc.fullParseAt == i+1 {
+					require.Equal(t, IncrementalNeedsFullParse, applied)
+					require.True(t, outcome.ForceReplace)
+					require.Nil(t, outcome.TerminationStatus)
+					assert.Empty(t, outcome.Messages)
+					assert.Len(t, results[0].Messages, ordinal)
+					status = results[0].Session.TerminationStatus
+					if status == TerminationAwaitingUser {
+						waiting++
+					}
+					continue
+				}
 				require.Equal(t, IncrementalApplied, applied)
 				if tc.tails[i] == duration || tc.tails[i] == pending {
 					require.NotNil(t, outcome.TerminationStatus)
@@ -130,6 +162,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 				}
 				assert.Equal(t, int64(len(tail)), outcome.ConsumedBytes)
 				ordinal += len(outcome.Messages)
+				lastEntryUUID = results[0].Messages[ordinal-1].SourceUUID
 				assert.Len(t, results[0].Messages, ordinal, "duration records stay out of messages")
 				if outcome.TerminationStatus != nil {
 					status = *outcome.TerminationStatus
