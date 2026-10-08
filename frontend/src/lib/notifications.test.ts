@@ -87,6 +87,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("desktop notification watcher", () => {
+  it("remembers a focused completion before a system-only usage archive append", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    messages.mockResolvedValue({ messages: [assistantMessage({ ordinal: 1 })], count: 1 });
+    await start("session");
+    await change({ termination_status: "awaiting_user" });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+
+    focus.mockReturnValue(false);
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+
+    messages.mockResolvedValue({ messages: [assistantMessage({ ordinal: 3 })], count: 1 });
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
   it("ignores system-only appends in a usage-only archive after baseline and delivery", async () => {
     row.termination_status = "awaiting_user";
     messages.mockResolvedValue({ messages: [assistantMessage({ ordinal: 1 })], count: 1 });

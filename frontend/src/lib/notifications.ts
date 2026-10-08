@@ -104,14 +104,12 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
           activity,
         };
         let turnEnd =
-          !silent(row) &&
           !!previous &&
           row.termination_status === "awaiting_user" &&
           (previous.status !== "awaiting_user" ||
             previous.user_message_count !== row.user_message_count);
         try {
           if (
-            !silent(row) &&
             row.termination_status === "awaiting_user" &&
             (!previous || turnEnd || row.message_count > previous.message_count)
           ) {
