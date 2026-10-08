@@ -198,8 +198,19 @@ fixtures retain this field; missing identities remain source-local.
   current transcript leaf as its parent. A duration cannot finish an unanswered
   user prompt. Mixed message and duration tails validate ancestry too; an
   unresolved parent requires a full parse. Duration-only tails check the last
-  stored message and fall back for unanswered prompts. Each branch advances
-  `EndedAt` to its resolved duration timestamp.
+  stored message and fall back for unanswered prompts, including queued-command
+  attachments. A duration parented to a stored system-promoted user record
+  already falls back when its UUID differs from the substantive stored tail.
+  Each branch advances `EndedAt` to its resolved duration timestamp.
+
+  Reverified 2026-10-08 against the 2.1.294 bundle, SHA-256
+  `1f6471eb5a1c21a1f8b54a7827329d64433424dcce51717a54e837adb542163a`.
+  Its `Ae` user constructor supplies `uuid:Ze||(hn?hn():Uh())`; `CAn`
+  supplies assistant UUIDs with `uuid:he()`, defaulting `he` to `Uh`.
+  `Uh` imports `randomUUID` from `crypto`. The wire importer fills missing
+  user and assistant UUIDs with `s.uuid??co()`, and `insertMessageChain`
+  preserves those UUIDs when writing JSONL. UUID-less CLI message fixtures
+  do not represent this producer.
 
 - **Incremental turn status (2026-10-07):** Each message line with entrypoint
   `cli`, version 2.1.259 or newer, and `isSidechain` false uses `turn_duration`

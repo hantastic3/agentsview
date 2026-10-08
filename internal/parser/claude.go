@@ -867,6 +867,11 @@ func claudeStoredTailNeedsFullParse(path string, offset int64, lastEntryUUID str
 			return true
 		}
 		entryType := gjson.GetBytes(line, "type").Str
+		if entryType == "attachment" {
+			if qc, ok := extractQueuedCommand(string(line)); ok && !queuedCommandMessage(qc).IsSystem {
+				return true
+			}
+		}
 		if entryType != "user" && entryType != "assistant" {
 			continue
 		}
