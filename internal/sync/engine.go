@@ -19311,7 +19311,13 @@ func (e *Engine) writeIncremental(ctx context.Context,
 
 	preserveTerminationStatus := true
 	for _, msg := range inc.msgs {
-		if !msg.IsSystem {
+		if !msg.IsSystem || len(msg.ToolResults) > 0 {
+			preserveTerminationStatus = false
+			break
+		}
+	}
+	for _, link := range inc.links {
+		if link.HasResult {
 			preserveTerminationStatus = false
 			break
 		}
