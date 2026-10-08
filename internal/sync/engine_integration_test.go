@@ -18405,6 +18405,34 @@ func TestIncrementalSync_ClaudeToolResultClearsPendingStatus(t *testing.T) {
 }
 
 func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
+	t.Run("completed partial record followed by system-only metadata", func(t *testing.T) {
+		env := setupTestEnv(t)
+		metadata := claudeNotificationTranscript(testjsonl.ClaudeUserJSON("<task-notification>background task finished</task-notification>", tsEarlyS5))
+		partialAt := len(metadata) / 2
+		initial := claudeNotificationTranscript(testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hello", tsEarly),
+			testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn"),
+		))
+		path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial+metadata[:partialAt])
+		env.engine.SyncAll(t.Context(), nil)
+		session, err := env.db.GetSessionFull(t.Context(), "notify")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		require.NotNil(t, session.TerminationStatus)
+		require.Equal(t, "truncated", *session.TerminationStatus)
+
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		_, err = f.WriteString(metadata[partialAt:] + "\n" + metadata + "\n")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		env.engine.SyncPaths([]string{path})
+		session, err = env.db.GetSessionFull(t.Context(), "notify")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Nil(t, session.TerminationStatus)
+		assert.True(t, session.LastWriteIncremental)
+	})
 	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
 	for _, tc := range []struct {
 		name  string

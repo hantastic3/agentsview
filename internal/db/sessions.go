@@ -3082,7 +3082,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			termination_status = CASE WHEN ? IS NULL AND ? THEN termination_status ELSE ? END,
+			termination_status = CASE WHEN ? IS NULL AND ? AND termination_status <> 'truncated' THEN termination_status ELSE ? END,
 			-- Mark the row as last written by the incremental-append path.
 			-- The full-replace writer (upsertSessionArgs) resets this to
 			-- false; parse-diff reads it to classify benign

@@ -46,6 +46,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       status?: string;
       user_message_count: number;
       message_count: number;
+      assistant_ordinal: number;
       activity: number;
     }
   >();
@@ -99,6 +100,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
           status: row.termination_status,
           user_message_count: row.user_message_count,
           message_count: row.message_count,
+          assistant_ordinal: previous?.assistant_ordinal ?? -1,
           activity,
         };
         let turnEnd =
@@ -110,22 +112,26 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         try {
           if (
             !silent(row) &&
-            !turnEnd &&
-            previous?.status === "awaiting_user" &&
             row.termination_status === "awaiting_user" &&
-            row.message_count > previous.message_count
+            (!previous || turnEnd || row.message_count > previous.message_count)
           ) {
-            let remaining = row.message_count - previous.message_count;
+            let remaining =
+              !previous || turnEnd ? row.message_count : row.message_count - previous.message_count;
             let from: number | undefined;
-            while (remaining > 0 && !turnEnd && !stopped) {
+            while (remaining > 0 && !stopped) {
               const result = await SessionsService.getApiV1SessionsByIdMessages(
                 { id: row.id },
                 { direction: "desc", limit: remaining, ...(from === undefined ? {} : { from }) },
               );
               if (!result.messages.length) break;
-              turnEnd ||= result.messages.some(
+              const assistant = result.messages.find(
                 (message) => !message.is_system && message.role === "assistant",
               );
+              if (assistant) {
+                turnEnd ||= !!previous && assistant.ordinal > previous.assistant_ordinal;
+                entry.assistant_ordinal = Math.max(entry.assistant_ordinal, assistant.ordinal);
+                break;
+              }
               remaining -= result.messages.length;
               from = result.messages[result.messages.length - 1]!.ordinal - 1;
               if (from < 0) break;

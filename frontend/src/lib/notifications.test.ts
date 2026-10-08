@@ -35,6 +35,7 @@ async function start(viewing: string | null = null) {
   stop = startNotificationWatcher(() => viewing);
   await flush();
   expect(list).toHaveBeenCalled();
+  messages.mockClear();
 }
 async function change(patch: Partial<DbSession> = {}) {
   row = { ...row, ...patch };
@@ -74,7 +75,7 @@ beforeEach(() => {
     async () => row as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>,
   );
   messages.mockImplementation(async () => ({
-    messages: [assistantMessage()],
+    messages: [assistantMessage({ ordinal: row.message_count - 1 })],
     count: 1,
   }));
 });
@@ -86,6 +87,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("desktop notification watcher", () => {
+  it("ignores system-only appends in a usage-only archive after baseline and delivery", async () => {
+    row.termination_status = "awaiting_user";
+    messages.mockResolvedValue({ messages: [assistantMessage({ ordinal: 1 })], count: 1 });
+    await start();
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+
+    messages.mockResolvedValue({ messages: [assistantMessage({ ordinal: 3 })], count: 1 });
+    await change({ message_count: 4 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change({ message_count: 5 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+
+    messages.mockResolvedValue({ messages: [assistantMessage({ ordinal: 5 })], count: 1 });
+    await change({ message_count: 6 });
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
+  });
   it.each(["2026-10-07T11:59:00Z", "2026-10-07T12:05:00Z"])(
     "silently baselines waiting sessions at %s and ignores repeats and progress",
     async (ended_at) => {
@@ -112,7 +130,7 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification.mock.calls[0]![0].title).toContain("Fix login");
     await change({ message_count: 4, user_message_count: 2 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
-    expect(messages).not.toHaveBeenCalled();
+    expect(messages).toHaveBeenCalledTimes(2);
     expect(session).toHaveBeenCalledTimes(2);
   });
   it("reads appended rows by position when stored ordinals skip numbers", async () => {
@@ -150,7 +168,7 @@ describe("desktop notification watcher", () => {
         ended_at,
       });
       expect(plugin.sendNotification).not.toHaveBeenCalled();
-      expect(messages).not.toHaveBeenCalled();
+      expect(messages).toHaveBeenCalledOnce();
     },
   );
   it.each([{ relationship_type: "subagent" }, { is_automated: true }])(
@@ -238,7 +256,7 @@ describe("desktop notification watcher", () => {
     await change();
     await change({ ended_at: "2026-10-08T12:01:01Z" });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-    expect(messages).not.toHaveBeenCalled();
+    expect(messages).toHaveBeenCalledOnce();
     await change({ message_count: 4, user_message_count: 2 });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
