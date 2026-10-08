@@ -151,6 +151,7 @@ func claudeParseFile(
 		globalStart      time.Time
 		globalEnd        time.Time
 		turnDuration     claudeTurnDuration
+		branchDurations  = map[string]claudeTurnDuration{}
 	)
 	allHaveUUID = true
 	if !opts.uploadIdentity {
@@ -307,6 +308,13 @@ func claudeParseFile(
 		// display name; last rename wins (empty arg clears it).
 		if entryType == "system" {
 			turnDuration.observe(string(lineBytes), lineIndex)
+			if gjson.GetBytes(lineBytes, "subtype").Str == "turn_duration" && len(entries) > 0 {
+				parent := gjson.GetBytes(lineBytes, "parentUuid").Str
+				if parent == "" {
+					parent = entries[len(entries)-1].uuid
+				}
+				branchDurations[parent] = turnDuration
+			}
 			if name, ok := extractRenameName(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
@@ -510,9 +518,18 @@ func claudeParseFile(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
+		duration := turnDuration
+		if hasAnyUUID && allHaveUUID {
+			for _, msg := range slices.Backward(results[i].Messages) {
+				if !msg.IsSystem {
+					duration = branchDurations[msg.SourceUUID]
+					break
+				}
+			}
+		}
 		results[i].Session.TerminationStatus = classifyClaudeTermination(
 			results[i].Messages,
-			entries, turnDuration,
+			entries, duration,
 			lastLineFailed,
 		)
 		results[i].Session.claudeRenameSeen = renameSeen

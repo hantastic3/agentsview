@@ -126,6 +126,54 @@ func TestClaudeTurnDuration(t *testing.T) {
 			assert.Equal(t, 1, waiting)
 		})
 	}
+	t.Run("fork durations stay in their branch", func(t *testing.T) {
+		const transcript = `{"type":"user","uuid":"u0","message":{"content":"hello"}}
+{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}
+{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"first"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"first answer","stop_reason":"end_turn"}}
+{"type":"user","uuid":"u2","parentUuid":"a1","message":{"content":"second"}}
+{"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"content":"second answer","stop_reason":"end_turn"}}
+{"type":"user","uuid":"u3","parentUuid":"a2","message":{"content":"third"}}
+{"type":"assistant","uuid":"a3","parentUuid":"u3","message":{"content":"third answer","stop_reason":"end_turn"}}
+{"type":"user","uuid":"u4","parentUuid":"a3","message":{"content":"fourth"}}
+{"type":"assistant","uuid":"a4","parentUuid":"u4","message":{"content":"main answer","stop_reason":"end_turn"}}
+{"type":"user","uuid":"uf","parentUuid":"a0","message":{"content":"fork"}}
+{"type":"assistant","uuid":"af","parentUuid":"uf","message":{"content":"fork answer","stop_reason":"end_turn"}}
+`
+		for _, tc := range []struct {
+			name, tail string
+			main, fork TerminationStatus
+		}{
+			{
+				name: "fork has no duration",
+				tail: `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4"}` + "\n",
+				main: TerminationAwaitingUser, fork: TerminationClean,
+			},
+			{
+				name: "fork has pending agents",
+				tail: `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"af","pendingBackgroundAgentCount":2}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4"}` + "\n",
+				main: TerminationAwaitingUser, fork: TerminationClean,
+			},
+			{
+				name: "fork finished before main duration",
+				tail: `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"af"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4","pendingBackgroundAgentCount":2}` + "\n",
+				main: TerminationClean, fork: TerminationAwaitingUser,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				content := testjsonl.ClaudeProducerJSONL(transcript+tc.tail, `"entrypoint":"cli","version":"2.1.266",`)
+				path := filepath.Join(t.TempDir(), "session.jsonl")
+				writeSourceFile(t, path, content)
+				results, err := parseClaudeSession(path, "project", "local")
+				require.NoError(t, err)
+				require.Len(t, results, 2)
+				assert.Equal(t, "session", results[0].Session.ID)
+				assert.Equal(t, tc.main, results[0].Session.TerminationStatus)
+				assert.Equal(t, "session-uf", results[1].Session.ID)
+				assert.Equal(t, tc.fork, results[1].Session.TerminationStatus)
+			})
+		}
+	})
 }
 
 func TestClaudeTurnDurationPrecedence(t *testing.T) {

@@ -190,9 +190,10 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Incremental turn status (2026-10-07):** Each message line with entrypoint
   `cli`, version 2.1.259 or newer, and `isSidechain` false uses `turn_duration`
-  to finish the turn. Full parsing requires a later duration with zero pending
-  background agents. That duration supersedes pending tool calls; truncation
-  keeps precedence. Until completion, an `end_turn` gives `clean`. Older CLI,
+  to finish the turn. Full parsing requires a later duration in the same branch
+  with zero pending background agents. Forks use their own duration records.
+  That duration supersedes pending tool calls; truncation keeps precedence.
+  Until completion, an `end_turn` gives `clean`. Older CLI,
   headless, sidechain, and unversioned lines keep the `end_turn` signal.
   Incremental parsing uses only appended lines. A duration-only tail uses its
   own producer fields and gives `awaiting_user` at zero pending agents or

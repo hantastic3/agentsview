@@ -8,7 +8,9 @@
   let denied = $state(false);
   let requesting = $state(false);
   let checked = $state(false);
-  $effect(() => { checked = settings.notifications.enabled; });
+  $effect(() => {
+    checked = settings.notifications.enabled;
+  });
 
   async function toggle(enabled: boolean) {
     requesting = true;
@@ -31,9 +33,6 @@
   {m.settings_notifications_enable()}
 </Toggle>
 <p>{m.settings_notifications_turn_end_hint()}</p>
-{#if available}
-  <p>{m.settings_notifications_os_settings()}</p>
-{/if}
 {#if !available}
   <p role="status">{m.settings_notifications_unavailable()}</p>
 {:else if denied}

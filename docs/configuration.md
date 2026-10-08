@@ -202,6 +202,9 @@ cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
 chart_palette = "agentsview"
 zoom_level = 120
+
+[notifications]
+enabled = false
 ```
 
 | Field                               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -242,6 +245,9 @@ zoom_level = 120
 Claude transcripts that record `turn_duration` trigger toasts after Stop hooks
 finish, with no background agents pending. Older and headless transcripts use
 the assistant's `end_turn` signal.
+
+Each session's first sighting stays silent, including restored sessions.
+Toasts require a later turn completion in a session the app has already seen.
 
 The `cursor_secret` is generated automatically on first run. For Gist
 publishing, AgentsView first uses a saved `github_token`. For local browser

@@ -49,15 +49,20 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       activity: number;
     }
   >();
-  let primed = false;
   let stopped = false;
   let running = false;
   let pending = false;
 
+  function silent(row: DbSession): boolean {
+    return (
+      row.relationship_type === "subagent" ||
+      row.is_automated ||
+      (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus())
+    );
+  }
+
   function send(row: DbSession) {
-    if (stopped) return;
-    if (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus())
-      return;
+    if (stopped || silent(row)) return;
     const name = row.display_name || row.project || row.agent;
     bridge()?.sendNotification({
       title: m.notification_turn_end_title_suffix({ name }),
@@ -90,9 +95,6 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       for (const row of rows) {
         const activity = Date.parse(row.ended_at || row.started_at || "");
         const previous = seen.get(row.id);
-        const silent =
-          row.relationship_type === "subagent" ||
-          (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus());
         const entry = {
           status: row.termination_status,
           user_message_count: row.user_message_count,
@@ -100,15 +102,14 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
           activity,
         };
         let turnEnd =
-          !silent &&
+          !silent(row) &&
+          !!previous &&
           row.termination_status === "awaiting_user" &&
-          (previous
-            ? previous.status !== "awaiting_user" ||
-              previous.user_message_count !== row.user_message_count
-            : primed);
+          (previous.status !== "awaiting_user" ||
+            previous.user_message_count !== row.user_message_count);
         try {
           if (
-            !silent &&
+            !silent(row) &&
             !turnEnd &&
             previous?.status === "awaiting_user" &&
             row.termination_status === "awaiting_user" &&
@@ -137,15 +138,14 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
               current.message_count !== row.message_count
             )
               continue;
+            send(current);
           }
         } catch (err) {
           console.warn("notification turn-end read failed", err);
           continue;
         }
-        if (turnEnd) send(row);
         seen.set(row.id, entry);
       }
-      primed = true;
       for (const [id, entry] of seen) {
         if (entry.activity < fetchedAt - RETENTION_MS) seen.delete(id);
       }

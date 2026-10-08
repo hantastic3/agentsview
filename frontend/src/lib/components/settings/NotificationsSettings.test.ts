@@ -137,6 +137,10 @@ it("shows OS notification settings guidance when desktop permission reports gran
     notification: { isPermissionGranted: vi.fn().mockResolvedValue(true) },
   });
   const { getByText, queryByRole } = render(NotificationsSettings);
-  expect(getByText("Toasts follow the OS notification settings for agentsview.")).toBeTruthy();
+  expect(
+    getByText(
+      "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for agentsview.",
+    ),
+  ).toBeTruthy();
   expect(queryByRole("status")).toBeNull();
 });
