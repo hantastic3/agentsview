@@ -8472,6 +8472,7 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 	tests := []struct {
 		name              string
 		terminationStatus *string
+		preserveStatus    bool
 		wantStatus        string
 		wantNull          bool
 		msgCount          int
@@ -8486,7 +8487,8 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			msgCount: 1,
 			wantNull: true,
 		},
-		{name: "nil with unchanged count keeps status", wantStatus: "tool_call_pending"},
+		{name: "nil with unchanged count clears status", wantNull: true},
+		{name: "system-only append keeps status", preserveStatus: true, wantStatus: "tool_call_pending"},
 	}
 
 	for _, tt := range tests {
@@ -8499,8 +8501,9 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			}), "seed session")
 
 			update := IncrementalSessionUpdate{
-				TerminationStatus: tt.terminationStatus,
-				MsgCount:          tt.msgCount,
+				TerminationStatus:     tt.terminationStatus,
+				KeepTerminationStatus: tt.preserveStatus,
+				MsgCount:              tt.msgCount,
 			}
 			require.NoError(t, d.UpdateSessionIncremental(t.Context(),
 				"incremental-status", update,
@@ -8541,12 +8544,12 @@ func TestWriteSessionIncrementalSystemOnlyStatus(t *testing.T) {
 			require.NoError(t, err)
 			_, err = d.WriteSessionIncremental(t.Context(), "session", []Message{
 				{SessionID: "session", Ordinal: 1, Role: "user", IsSystem: true, Content: "system notice"},
-			}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2})
+			}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2, KeepTerminationStatus: true})
 			require.NoError(t, err)
 			_, err = d.WriteSessionIncremental(t.Context(), "session", []Message{
 				{SessionID: "session", Ordinal: 2, Role: tc.role, IsSystem: tc.isSystem, Content: "new message"},
 				{SessionID: "session", Ordinal: 3, Role: "user", IsSystem: true, Content: "system notice"},
-			}, IncrementalSessionUpdate{MsgCount: 4, NextOrdinal: 4, TerminationStatus: tc.status})
+			}, IncrementalSessionUpdate{MsgCount: 4, NextOrdinal: 4, TerminationStatus: tc.status, KeepTerminationStatus: tc.isSystem})
 			require.NoError(t, err)
 			session, err := d.GetSessionFull(t.Context(), "session")
 			require.NoError(t, err)

@@ -18450,6 +18450,36 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 	}
 }
 
+func TestIncrementalSync_ClaudeToolResultClearsPendingStatus(t *testing.T) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("read the file", tsEarly),
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"read-1","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
+	)
+	path := env.writeClaudeSession(t, "proj-tools", "tools.jsonl", initial)
+	env.engine.SyncAll(t.Context(), nil)
+	session, err := env.db.GetSessionFull(t.Context(), "tools")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TerminationStatus)
+	require.Equal(t, "tool_call_pending", *session.TerminationStatus)
+	require.Equal(t, 2, session.MessageCount)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.ClaudeToolResultUserJSON("read-1", "file contents", tsEarlyS5) + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	env.engine.SyncPaths([]string{path})
+
+	session, err = env.db.GetSessionFull(t.Context(), "tools")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Nil(t, session.TerminationStatus)
+	assert.Equal(t, 2, session.MessageCount)
+	assert.True(t, session.LastWriteIncremental)
+}
+
 func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
 	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
 	const duration = `{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}` + "\n"

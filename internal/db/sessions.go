@@ -2858,6 +2858,7 @@ type MessageTokenUsageUpdate struct {
 type IncrementalSessionUpdate struct {
 	EndedAt                  *string
 	TerminationStatus        *string
+	KeepTerminationStatus    bool
 	MsgCount                 int
 	UserMsgCount             int
 	FileSize                 int64
@@ -3058,8 +3059,8 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 // at insert; the incremental path never re-evaluates it).
 //
 // A non-nil termination_status is an authoritative incremental verdict and
-// is stored as-is. Nil keeps the stored status when the append adds only
-// system messages or leaves the message count unchanged; otherwise it clears it.
+// is stored as-is. Nil keeps the stored status only when the caller marks
+// the parsed append as system-only; otherwise it clears it.
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {
@@ -3081,10 +3082,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			termination_status = CASE WHEN ? IS NULL AND (message_count + (
-				SELECT COUNT(*) FROM messages
-				WHERE session_id = sessions.id AND ordinal >= sessions.next_ordinal AND is_system = 1
-			) = ?) THEN termination_status ELSE ? END,
+			termination_status = CASE WHEN ? IS NULL AND ? THEN termination_status ELSE ? END,
 			-- Mark the row as last written by the incremental-append path.
 			-- The full-replace writer (upsertSessionArgs) resets this to
 			-- false; parse-diff reads it to classify benign
@@ -3097,7 +3095,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
 		update.HasTotalOutputTokens, update.HasPeakContextTokens,
-		update.TerminationStatus, update.MsgCount, update.TerminationStatus, id,
+		update.TerminationStatus, update.KeepTerminationStatus, update.TerminationStatus, id,
 	)
 	if err != nil {
 		return fmt.Errorf(
