@@ -106,42 +106,41 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
             ? previous.status !== "awaiting_user" ||
               previous.user_message_count !== row.user_message_count
             : activity > startedAt);
-        if (
-          !silent &&
-          !turnEnd &&
-          previous?.status === "awaiting_user" &&
-          row.termination_status === "awaiting_user" &&
-          row.message_count > previous.message_count
-        ) {
-          try {
-            let from = row.message_count - 1;
-            while (from >= previous.message_count && !stopped) {
+        try {
+          if (
+            !silent &&
+            !turnEnd &&
+            previous?.status === "awaiting_user" &&
+            row.termination_status === "awaiting_user" &&
+            row.message_count > previous.message_count
+          ) {
+            let remaining = row.message_count - previous.message_count;
+            let from: number | undefined;
+            while (remaining > 0 && !turnEnd && !stopped) {
               const result = await SessionsService.getApiV1SessionsByIdMessages(
                 { id: row.id },
-                { direction: "desc", from, limit: from - previous.message_count + 1 },
+                { direction: "desc", limit: remaining, ...(from === undefined ? {} : { from }) },
               );
               if (!result.messages.length) break;
               turnEnd ||= result.messages.some(
-                (message) =>
-                  message.ordinal >= previous.message_count &&
-                  !message.is_system &&
-                  message.role === "assistant",
+                (message) => !message.is_system && message.role === "assistant",
               );
+              remaining -= result.messages.length;
               from = result.messages[result.messages.length - 1]!.ordinal - 1;
             }
-            if (turnEnd) {
-              const current = await SessionsService.getApiV1SessionsById({ id: row.id });
-              if (
-                current.termination_status !== "awaiting_user" ||
-                current.user_message_count !== row.user_message_count ||
-                current.message_count !== row.message_count
-              )
-                continue;
-            }
-          } catch (err) {
-            console.warn("notification turn-end read failed", err);
-            continue;
           }
+          if (turnEnd) {
+            const current = await SessionsService.getApiV1SessionsById({ id: row.id });
+            if (
+              current.termination_status !== "awaiting_user" ||
+              current.user_message_count !== row.user_message_count ||
+              current.message_count !== row.message_count
+            )
+              continue;
+          }
+        } catch (err) {
+          console.warn("notification turn-end read failed", err);
+          continue;
         }
         if (turnEnd) send(row);
         seen.set(row.id, entry);

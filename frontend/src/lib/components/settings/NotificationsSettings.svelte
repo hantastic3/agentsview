@@ -2,22 +2,13 @@
   import { Toggle } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { settings } from "../../stores/settings.svelte.js";
-  import { notificationsAvailable, notificationPermissionGranted, requestNotificationPermission } from "../../notifications.js";
+  import { notificationsAvailable, requestNotificationPermission } from "../../notifications.js";
 
   const available = notificationsAvailable();
   let denied = $state(false);
   let requesting = $state(false);
   let checked = $state(false);
   $effect(() => { checked = settings.notifications.enabled; });
-  $effect(() => {
-    if (available && settings.notifications.enabled) {
-      let active = true;
-      void notificationPermissionGranted().then((granted) => {
-        if (active) denied = !granted;
-      });
-      return () => { active = false; };
-    }
-  });
 
   async function toggle(enabled: boolean) {
     requesting = true;

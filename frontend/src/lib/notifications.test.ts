@@ -73,8 +73,8 @@ beforeEach(() => {
   session.mockImplementation(
     async () => row as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>,
   );
-  messages.mockImplementation(async (_, params) => ({
-    messages: [assistantMessage({ ordinal: params!.from! - params!.limit! + 1 })],
+  messages.mockImplementation(async () => ({
+    messages: [assistantMessage()],
     count: 1,
   }));
 });
@@ -109,17 +109,32 @@ describe("desktop notification watcher", () => {
     await change({ message_count: 4, user_message_count: 2 });
     expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
     expect(messages).not.toHaveBeenCalled();
-    expect(session).not.toHaveBeenCalled();
+    expect(session).toHaveBeenCalledTimes(2);
   });
-  it("keeps system-only appends silent while waiting", async () => {
-    await start();
-    await change({ termination_status: "awaiting_user", message_count: 3 });
-    messages.mockResolvedValue({
-      messages: [assistantMessage({ ordinal: 3, is_system: true })],
-      count: 1,
+  it("reads appended rows by position when stored ordinals skip numbers", async () => {
+    row.termination_status = "awaiting_user";
+    row.message_count = 3;
+    const stored = [
+      assistantMessage({ ordinal: 0, role: "user" }),
+      assistantMessage({ ordinal: 1 }),
+      assistantMessage({ ordinal: 3, is_system: true }),
+    ];
+    messages.mockImplementation(async (_, params) => {
+      const page = stored
+        .filter((message) => params?.from === undefined || message.ordinal <= params.from)
+        .slice()
+        .reverse()
+        .slice(0, params!.limit!);
+      return { messages: page, count: page.length };
     });
+    await start();
+    stored.push(assistantMessage({ ordinal: 4, is_system: true }));
     await change({ message_count: 4 });
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(messages).toHaveBeenLastCalledWith({ id: "session" }, { direction: "desc", limit: 1 });
+    stored.push(assistantMessage({ ordinal: 6 }));
+    await change({ message_count: 5 });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("toasts a newly discovered waiting session", async () => {
     await start();
@@ -172,6 +187,37 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
+  it.each(["status flip", "first-seen row"])(
+    "rechecks a %s when the user resumes while later list pages load",
+    async (candidate) => {
+      await start();
+      const waiting = {
+        ...row,
+        id: candidate === "first-seen row" ? "new" : row.id,
+        termination_status: "awaiting_user",
+        ended_at: "2026-10-07T12:00:01Z",
+      };
+      let resolve!: (value: Awaited<ReturnType<typeof SessionsService.getApiV1Sessions>>) => void;
+      list.mockResolvedValueOnce({ sessions: [waiting], total: 1, next_cursor: "page2" });
+      list.mockReturnValueOnce(
+        new Promise((done) => {
+          resolve = done;
+        }),
+      );
+      mocks.callback();
+      await flush();
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "page2" }));
+      row = { ...waiting, termination_status: "", user_message_count: 2, message_count: 3 };
+      resolve({ sessions: [], total: 1 });
+      await flush();
+      expect(session).toHaveBeenCalledExactlyOnceWith({ id: waiting.id });
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+      await change(waiting);
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+      await change();
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    },
+  );
   it("toasts a second turn end after a system-only append", async () => {
     row.termination_status = "awaiting_user";
     await start();
@@ -240,7 +286,7 @@ describe("desktop notification watcher", () => {
     await change({ message_count: 2 + delta });
     expect(messages).toHaveBeenCalledExactlyOnceWith(
       { id: "session" },
-      { direction: "desc", from: 1 + delta, limit },
+      { direction: "desc", limit },
     );
     expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
     expect(plugin.sendNotification).toHaveBeenCalledExactlyOnceWith({
@@ -252,11 +298,11 @@ describe("desktop notification watcher", () => {
     row.termination_status = "awaiting_user";
     await start();
     const appended = [
-      assistantMessage(),
+      assistantMessage({ ordinal: 3 }),
       ...Array.from({ length: 1100 }, (_, i) =>
         assistantMessage({
           id: i + 2,
-          ordinal: i + 3,
+          ordinal: i * 2 + 5,
           role: "system",
           content: "Session metadata updated",
           is_system: true,
@@ -265,7 +311,7 @@ describe("desktop notification watcher", () => {
     ];
     messages.mockImplementation(async (_, params) => {
       const page = appended
-        .filter((message) => message.ordinal <= params!.from!)
+        .filter((message) => params?.from === undefined || message.ordinal <= params.from)
         .reverse()
         .slice(0, Math.min(params!.limit!, 1000));
       return { messages: page, count: page.length };
@@ -274,19 +320,19 @@ describe("desktop notification watcher", () => {
     expect(messages).toHaveBeenNthCalledWith(
       1,
       { id: "session" },
-      { direction: "desc", from: 1102, limit: 1101 },
+      { direction: "desc", limit: 1101 },
     );
     expect(messages).toHaveBeenNthCalledWith(
       2,
       { id: "session" },
-      { direction: "desc", from: 102, limit: 101 },
+      { direction: "desc", from: 204, limit: 101 },
     );
     expect(messages).toHaveBeenCalledTimes(2);
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([{ role: "user" }, { is_system: true }, { ordinal: 1 }])(
+  it.each([{ role: "user" }, { is_system: true }])(
     "ignores a waiting append without a new assistant message: %j",
     async (patch) => {
       row.termination_status = "awaiting_user";
