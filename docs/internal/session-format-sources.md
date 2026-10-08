@@ -194,6 +194,12 @@ fixtures retain this field; missing identities remain source-local.
   Negative or malformed counts keep the turn incomplete. Duration
   parents can point to a system `stop_hook_summary`; full parsing resolves
   system ancestry to the owning user or assistant record in the same branch.
+  The 2.1.293 deferred swarm duration can follow a new prompt and use the
+  current transcript leaf as its parent. A duration cannot finish an unanswered
+  user prompt. Mixed message and duration tails validate ancestry too; an
+  unresolved parent requires a full parse. Duration-only tails check the last
+  stored message and fall back for unanswered prompts. Each branch advances
+  `EndedAt` to its resolved duration timestamp.
 
 - **Incremental turn status (2026-10-07):** Each message line with entrypoint
   `cli`, version 2.1.259 or newer, and `isSidechain` false uses `turn_duration`

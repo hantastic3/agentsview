@@ -540,6 +540,9 @@ func claudeParseFile(
 			entries, duration,
 			lastLineFailed,
 		)
+		if ts := extractTimestamp(duration.line); ts.After(results[i].Session.EndedAt) {
+			results[i].Session.EndedAt = ts
+		}
 		results[i].Session.claudeRenameSeen = renameSeen
 	}
 
@@ -813,6 +816,9 @@ func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, dur
 		if msg.IsSystem {
 			continue
 		}
+		if msg.Role == RoleUser && len(msg.ToolResults) == 0 {
+			return status
+		}
 		for _, entry := range slices.Backward(entries) {
 			if entry.uuid == msg.SourceUUID {
 				if !claudeWritesTurnDuration(entry.line) {
@@ -846,6 +852,34 @@ func (d *claudeTurnDuration) classifyTail(messages []ParsedMessage, entries []da
 		return new(status)
 	}
 	return nil
+}
+
+func claudeStoredTailNeedsFullParse(path string, offset int64, lastEntryUUID string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	reader := claudeBackwardReader{f: f, pos: offset}
+	for {
+		line, _, ok, err := reader.prev()
+		if err != nil || !ok {
+			return true
+		}
+		entryType := gjson.GetBytes(line, "type").Str
+		if entryType != "user" && entryType != "assistant" {
+			continue
+		}
+		msgs, _, _ := extractMessagesFrom([]dagEntry{{entryType: entryType, line: string(line)}}, 0)
+		for _, msg := range slices.Backward(msgs) {
+			if !msg.IsSystem {
+				if lastEntryUUID != "" && gjson.GetBytes(line, "uuid").Str != lastEntryUUID {
+					return true
+				}
+				return msg.Role == RoleUser && len(msg.ToolResults) == 0
+			}
+		}
+	}
 }
 
 // claudeParseSessionFrom parses only new lines from a Claude JSONL
@@ -1098,13 +1132,25 @@ func claudeParseSessionFrom(
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
-	if len(entries) == 0 && len(queuedCommands) == 0 {
+	if turnDuration.line != "" {
 		parent := gjson.Get(turnDuration.line, "parentUuid").Str
 		if ancestor, ok := systemParents[parent]; ok {
 			parent = ancestor
 		}
-		// A parent outside this tail needs the full parser to resolve stored system ancestry.
-		if parent != "" && parent != scan.lastEntryUUID {
+		tip := scan.lastEntryUUID
+		for _, entry := range entries {
+			if entry.lineIndex < turnDuration.position {
+				tip = entry.uuid
+			}
+		}
+		// An unresolved parent needs the full parser to resolve duration ownership.
+		if parent != "" && parent != tip {
+			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		}
+	}
+	if len(entries) == 0 && len(queuedCommands) == 0 {
+		// Duration-only tails need the stored message to rule out an unanswered prompt.
+		if turnDuration.line != "" && claudeStoredTailNeedsFullParse(path, offset, scan.lastEntryUUID) {
 			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 		}
 		if scan.termination != nil {

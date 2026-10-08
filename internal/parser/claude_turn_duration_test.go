@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,51 @@ func TestClaudeTurnDuration(t *testing.T) {
 		{
 			name: "duration in same tail", initial: initial,
 			tails: []string{answer + duration}, want: []TerminationStatus{TerminationAwaitingUser},
+		},
+		{
+			name: "deferred swarm duration after new prompt", producer: `"entrypoint":"cli","version":"2.1.293",`,
+			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n",
+			tails: []string{
+				`{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"continue"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"u1"}` + "\n",
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"}` + "\n",
+			},
+			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "deferred duration after stored prompt", fullParseAt: 1, producer: `"entrypoint":"cli","version":"2.1.293",`,
+			initial: initial,
+			tails:   []string{duration, answer + duration},
+			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name:    "duration finishes stored tool result",
+			initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n" + `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-a","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n" + `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n",
+			tails:   []string{duration}, want: []TerminationStatus{TerminationAwaitingUser},
+		},
+		{
+			name: "mixed tail duration belongs to older turn", fullParseAt: 1,
+			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n",
+			tails: []string{
+				`{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"continue"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"a0"}` + "\n",
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"}` + "\n",
+			},
+			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "mixed tail resolves stop hook ancestry", initial: initial,
+			tails: []string{
+				`{"type":"assistant","uuid":"a1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","uuid":"s1","parentUuid":"a1"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"s1"}` + "\n",
+			},
+			want: []TerminationStatus{TerminationAwaitingUser},
+		},
+		{
+			name: "mixed tail unresolved system ancestry", fullParseAt: 1,
+			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","uuid":"s0","parentUuid":"a0"}` + "\n",
+			tails: []string{
+				`{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"continue"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"s0"}` + "\n",
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"}` + "\n",
+			},
+			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
 			name: "duration belongs to an older turn", fullParseAt: 1,
@@ -148,7 +194,8 @@ func TestClaudeTurnDuration(t *testing.T) {
 					require.True(t, outcome.ForceReplace)
 					require.Nil(t, outcome.TerminationStatus)
 					assert.Empty(t, outcome.Messages)
-					assert.Len(t, results[0].Messages, ordinal)
+					ordinal = len(results[0].Messages)
+					lastEntryUUID = results[0].Messages[ordinal-1].SourceUUID
 					status = results[0].Session.TerminationStatus
 					if status == TerminationAwaitingUser {
 						waiting++
@@ -187,12 +234,19 @@ func TestClaudeTurnDuration(t *testing.T) {
 {"type":"user","uuid":"u4","parentUuid":"a3","message":{"content":"fourth"}}
 {"type":"assistant","uuid":"a4","parentUuid":"u4","message":{"content":"main answer","stop_reason":"end_turn"}}
 {"type":"user","uuid":"uf","parentUuid":"a0","message":{"content":"fork"}}
-{"type":"assistant","uuid":"af","parentUuid":"uf","message":{"content":"fork answer","stop_reason":"end_turn"}}
+{"type":"assistant","uuid":"af","parentUuid":"uf","timestamp":"2024-01-01T10:00:01Z","message":{"content":"fork answer","stop_reason":"end_turn"}}
 `
 		for _, tc := range []struct {
-			name, tail string
-			main, fork TerminationStatus
+			name, tail  string
+			main, fork  TerminationStatus
+			forkEndedAt string
 		}{
+			{
+				name: "delayed fork duration",
+				tail: `{"type":"system","subtype":"stop_hook_summary","uuid":"sf","parentUuid":"af"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"sf","timestamp":"2024-01-01T11:00:00Z"}` + "\n",
+				main: TerminationClean, fork: TerminationAwaitingUser,
+				forkEndedAt: "2024-01-01T11:00:00Z",
+			},
 			{
 				name: "fork has no duration",
 				tail: `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4"}` + "\n",
@@ -225,6 +279,9 @@ func TestClaudeTurnDuration(t *testing.T) {
 				assert.Equal(t, tc.main, results[0].Session.TerminationStatus)
 				assert.Equal(t, "session-uf", results[1].Session.ID)
 				assert.Equal(t, tc.fork, results[1].Session.TerminationStatus)
+				if tc.forkEndedAt != "" {
+					assert.Equal(t, tc.forkEndedAt, results[1].Session.EndedAt.Format(time.RFC3339))
+				}
 			})
 		}
 	})
