@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,9 +14,9 @@ import (
 
 func TestClaudeTurnDuration(t *testing.T) {
 	lastUUID := func(messages []ParsedMessage) string {
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].SourceUUID != "" {
-				return messages[i].SourceUUID
+		for _, message := range slices.Backward(messages) {
+			if message.SourceUUID != "" {
+				return message.SourceUUID
 			}
 		}
 		return ""
