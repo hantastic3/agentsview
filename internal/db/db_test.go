@@ -6248,7 +6248,7 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 
 	srcPath := filepath.Join(dir, "old.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj")
+	insertSession(t, srcDB, "s1", "proj", func(s *Session) { s.TurnOpen = false })
 	insertMessages(t, srcDB,
 		userMsg("s1", 0, "keep this pinned"),
 		asstMsg("s1", 1, "reply"),
@@ -6269,6 +6269,10 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 	count, err := dstDB.CopyTrashedDataFrom(srcPath)
 	requireNoError(t, err, "CopyTrashedDataFrom")
 	require.Len(t, count, 1, "copied trashed sessions")
+
+	var turnOpen bool
+	require.NoError(t, dstDB.getReader().QueryRow(ctx, "SELECT turn_open FROM sessions WHERE id = ?", "s1").Scan(&turnOpen))
+	assert.False(t, turnOpen)
 
 	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
 	requireNoError(t, err, "ListPinnedMessages")

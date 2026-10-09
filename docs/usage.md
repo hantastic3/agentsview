@@ -1300,8 +1300,9 @@ Desktop notifications run only against writable SQLite servers. Read-only
 PostgreSQL, DuckDB and ClickHouse servers keep the watcher off.
 
 Desktop notifications alert you when the turn really ends and the agent waits
-for you, including forks and continuations. Each session's first sighting stays
-silent, even if a turn has already finished. Only later changes can toast.
+for you, including forks and continuations. Sessions started before notifications
+were enabled stay silent on first sighting. A new session can toast even if its
+first turn finishes before the next refresh.
 Subagents, automated sessions, and the session in a focused window stay silent.
 Missed updates arrive within five minutes while the app runs. On macOS 13 and
 earlier, alerts may pause while the window is hidden.
@@ -1309,6 +1310,9 @@ Re-imported sessions can toast if the watcher still remembers their earlier
 state. A session that finishes while trashed can also toast after restoration
 and catch-up import. The app cannot distinguish that import from a later turn.
 Toasts follow the OS notification settings for AgentsView.
+For Claude Code, an earlier swarm finishing can toast before the current turn's
+Stop hooks finish. A held detached tool call can stay silent while another turn
+is active.
 On platforms that report denied permission, the toggle stays off and shows how
 to allow notifications. Apps without the notification bridge show unavailable.
 

@@ -53,6 +53,7 @@ beforeEach(() => {
     project: "demo",
     display_name: "Fix login",
     created_at: "2026-10-07T11:00:00Z",
+    started_at: "2026-10-07T11:00:00Z",
     ended_at: "2026-10-07T12:00:00Z",
     message_count: 2,
     user_message_count: 1,
@@ -72,6 +73,28 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("desktop notification watcher", () => {
+  it.each(["2026-10-07T12:00:00Z", "2026-10-07T12:00:01Z"])(
+    "toasts a quick first turn started at %s once",
+    async (started_at) => {
+      list.mockResolvedValueOnce({ sessions: [], total: 0 });
+      await start();
+      await change({ started_at, termination_status: "awaiting_user" });
+      await change();
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+      expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
+      stop?.();
+      vi.setSystemTime(new Date("2026-10-07T12:01:00Z"));
+      await start();
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    },
+  );
+  it("toasts a new session completed during the initial refresh", async () => {
+    row.started_at = "2026-10-07T12:00:00Z";
+    row.termination_status = "awaiting_user";
+    await start();
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
   it("records a waiting baseline silently", async () => {
     row.termination_status = "awaiting_user";
     await start();
@@ -100,7 +123,11 @@ describe("desktop notification watcher", () => {
   it("records a finished import after enabling silently", async () => {
     list.mockResolvedValueOnce({ sessions: [], total: 0 });
     await start();
-    await change({ created_at: "2026-10-07T12:01:00Z", termination_status: "awaiting_user" });
+    await change({
+      created_at: "2026-10-07T12:01:00Z",
+      started_at: "2026-10-07T11:00:00Z",
+      termination_status: "awaiting_user",
+    });
     await change();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });

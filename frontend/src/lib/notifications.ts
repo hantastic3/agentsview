@@ -44,7 +44,8 @@ const SAFETY_NET_REFRESH_MS = 5 * 60_000;
 
 export function startNotificationWatcher(viewingId: () => string | null): () => void {
   const seen = new Map<string, { replyId?: string }>();
-  let coveredSince = Date.now();
+  const startedAt = Date.now();
+  let coveredSince = startedAt;
   let stopped = false;
   let running = false;
   let pending = false;
@@ -90,10 +91,15 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       if (stopped) return;
       let readsSucceeded = true;
       for (const row of rows) {
-        const previous = seen.get(row.id);
+        let previous = seen.get(row.id);
         if (!previous) {
-          seen.set(row.id, { replyId: finished(row) ? row.last_reply_id : undefined });
-          continue;
+          previous = {
+            replyId:
+              Date.parse(row.started_at || "") >= startedAt || !finished(row)
+                ? undefined
+                : row.last_reply_id,
+          };
+          seen.set(row.id, previous);
         }
         if (!finished(row) || previous.replyId === row.last_reply_id) continue;
         try {

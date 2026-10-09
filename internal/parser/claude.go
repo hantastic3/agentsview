@@ -151,7 +151,7 @@ func claudeParseFile(
 		subagentMap      = map[string]string{}
 		globalStart      time.Time
 		globalEnd        time.Time
-		durations        []claudeTurnDuration
+		turnOpen         *bool
 	)
 	allHaveUUID = true
 	if !opts.uploadIdentity {
@@ -193,6 +193,7 @@ func claudeParseFile(
 			}
 		}
 
+		turnOpen = foldClaudeTurnOpen(turnOpen, string(lineBytes))
 		entryType := gjson.GetBytes(lineBytes, "type").Str
 		if opts.compatibleTitleEvents || opts.aiTitleFallback {
 			if opts.compatibleTitleEvents && compatibleName == "" {
@@ -307,7 +308,6 @@ func claudeParseFile(
 		// Handle system records. /rename local commands update the
 		// display name; last rename wins (empty arg clears it).
 		if entryType == "system" {
-			durations = collectClaudeTurnDuration(durations, lineBytes, lineIndex)
 			if name, ok := extractRenameName(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
@@ -503,8 +503,6 @@ func claudeParseFile(
 	// pulled from the last assistant message in each branch so
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
-	answered := claudeAnsweredUUIDs(results)
-	hasStopHooks := slices.ContainsFunc(durations, func(d claudeTurnDuration) bool { return d.summary })
 
 	for i := range results {
 		results[i].Session.RelationshipType = PromoteParentlessWorker(
@@ -519,7 +517,7 @@ func claudeParseFile(
 			lastAssistantStopReason(results[i].Messages),
 			lastLineFailed,
 		)
-		results[i].Session.TurnOpen = new(claudeTurnOpen(results[i].Messages, entries, durations, answered, hasStopHooks))
+		results[i].Session.TurnOpen = new(turnOpen != nil && *turnOpen)
 		results[i].Session.claudeRenameSeen = renameSeen
 	}
 
@@ -578,8 +576,6 @@ func compactClaudeEntry(line []byte) string {
 		{name: "timestamp"},
 		{name: "isCompactSummary"},
 		{name: "isSidechain"},
-		{name: "entrypoint"},
-		{name: "version"},
 		{name: "isMeta"},
 		{name: "requestId"},
 		{name: "promptSource"},
@@ -757,27 +753,20 @@ func claudeWritesTurnDuration(line string) bool {
 		semver.Compare("v"+gjson.Get(line, "version").Str, "v2.1.259") >= 0
 }
 
-type claudeTurnDuration struct {
-	position  int
-	pending   int64
-	workflows int64
-	summary   bool
-	clean     bool
-}
-
-func collectClaudeTurnDuration(durations []claudeTurnDuration, line []byte, position int) []claudeTurnDuration {
-	switch gjson.GetBytes(line, "subtype").Str {
-	case "stop_hook_summary":
-		errors := gjson.GetBytes(line, "hookErrors")
-		durations = append(durations, claudeTurnDuration{position: position, summary: true, clean: errors.IsArray() && len(errors.Array()) == 0})
-	case "turn_duration":
-		durations = append(durations, claudeTurnDuration{
-			position:  position,
-			pending:   claudePendingCount(gjson.GetBytes(line, "pendingBackgroundAgentCount")),
-			workflows: claudePendingCount(gjson.GetBytes(line, "pendingWorkflowCount")),
-		})
+// shortcut: deferred swarm durations have no turn owner, so they can close a later turn until the producer adds an ID.
+func foldClaudeTurnOpen(open *bool, line string) *bool {
+	switch gjson.Get(line, "type").Str {
+	case "assistant":
+		if !gjson.Get(line, "isSidechain").Bool() {
+			return new(claudeWritesTurnDuration(line))
+		}
+	case "system":
+		if gjson.Get(line, "subtype").Str == "turn_duration" {
+			return new(claudePendingCount(gjson.Get(line, "pendingBackgroundAgentCount")) != 0 ||
+				claudePendingCount(gjson.Get(line, "pendingWorkflowCount")) != 0)
+		}
 	}
-	return durations
+	return open
 }
 
 func claudePendingCount(count gjson.Result) int64 {
@@ -789,82 +778,6 @@ func claudePendingCount(count gjson.Result) int64 {
 		return -1
 	}
 	return value
-}
-
-func claudeAnsweredUUIDs(results []ParseResult) map[string]bool {
-	answered := make(map[string]bool)
-	for _, result := range results {
-		for _, msg := range result.Messages {
-			if !msg.IsSystem {
-				answered[msg.SourceUUID] = true
-			}
-		}
-	}
-	return answered
-}
-
-func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, answered map[string]bool, hasStopHooks bool) bool {
-	for replyIndex, msg := range slices.Backward(messages) {
-		if msg.IsSystem || msg.Role != RoleAssistant {
-			continue
-		}
-		if msg.SourceUUID == "" {
-			return false
-		}
-		for i, entry := range entries {
-			if entry.uuid != msg.SourceUUID {
-				continue
-			}
-			if !claudeWritesTurnDuration(entry.line) {
-				return false
-			}
-			// Deferred durations belong to the prior turn while this reply is streaming.
-			if msg.StopReason != "end_turn" {
-				return true
-			}
-			end := -1
-			for _, later := range entries[i+1:] {
-				if answered[later.uuid] {
-					end = later.lineIndex
-					break
-				}
-			}
-			previousUUID := ""
-			for _, earlier := range slices.Backward(messages[:replyIndex]) {
-				if !earlier.IsSystem && earlier.Role == RoleAssistant && earlier.StopReason == "end_turn" {
-					previousUUID = earlier.SourceUUID
-					break
-				}
-			}
-			previousReply := -1
-			for _, earlier := range entries {
-				if previousUUID != "" && earlier.uuid == previousUUID {
-					previousReply = earlier.lineIndex
-					break
-				}
-			}
-			priorDuration, cleanSummary := previousReply < 0, false
-			open := true
-			for _, duration := range durations {
-				if duration.position <= previousReply || (end >= 0 && duration.position > end) {
-					continue
-				}
-				if duration.summary {
-					if duration.position > entry.lineIndex {
-						cleanSummary = duration.clean
-					}
-					continue
-				}
-				if duration.position > entry.lineIndex {
-					open = duration.pending != 0 || duration.workflows != 0 || (hasStopHooks && !cleanSummary && !priorDuration)
-				}
-				priorDuration = true
-			}
-			return open
-		}
-		return false
-	}
-	return false
 }
 
 // claudeParseSessionFrom parses only new lines from a Claude JSONL
@@ -949,7 +862,6 @@ func claudeParseSessionFrom(
 	stored := scan.stored
 	var (
 		entries        []dagEntry
-		durations      []claudeTurnDuration
 		verdictLines   []string
 		queuedCommands []claudeQueuedCommand
 		subagentMap    = make(map[string]string)
@@ -965,10 +877,16 @@ func claudeParseSessionFrom(
 		appendedCustomTitle    string
 	)
 
+	if scan.turnOpen != nil {
+		*scan.turnOpen = nil
+	}
 	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
+			if scan.turnOpen != nil {
+				*scan.turnOpen = foldClaudeTurnOpen(*scan.turnOpen, line)
+			}
 			line = resolveClaudePersistedToolResults(path, line)
-			if scan.termination != nil || scan.turnOpen != nil {
+			if scan.termination != nil {
 				verdictLines = append(verdictLines, line)
 			}
 			if ts := extractTimestamp(line); !ts.IsZero() {
@@ -993,7 +911,6 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "system" {
-				durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
 				); ok {
@@ -1115,7 +1032,7 @@ func claudeParseSessionFrom(
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
-		if err := scan.setVerdicts(path, offset, verdictLines, nil, entries, durations); err != nil {
+		if err := scan.setVerdicts(path, offset, verdictLines, nil, entries); err != nil {
 			return nil, nil, time.Time{}, 0, err
 		}
 		return nil, links, latestTS, consumed, nil
@@ -1190,15 +1107,15 @@ func claudeParseSessionFrom(
 	if latestTS.After(endedAt) {
 		endedAt = latestTS
 	}
-	if err := scan.setVerdicts(path, offset, verdictLines, msgs, entries, durations); err != nil {
+	if err := scan.setVerdicts(path, offset, verdictLines, msgs, entries); err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
 
 	return msgs, links, endedAt, consumed, nil
 }
 
-func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []string, msgs []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration) error {
-	if scan.termination == nil && scan.turnOpen == nil {
+func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []string, msgs []ParsedMessage, entries []dagEntry) error {
+	if scan.termination == nil {
 		return nil
 	}
 	f, err := os.Open(path)
@@ -1207,31 +1124,10 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 	}
 	defer f.Close()
 	reader := claudeBackwardReader{f: f, pos: offset}
-	hasStopHooks := slices.ContainsFunc(tail, func(line string) bool {
-		return gjson.Get(line, "subtype").Str == "stop_hook_summary" && gjson.Get(line, "type").Str == "system"
-	})
-	if scan.turnOpen != nil && !hasStopHooks {
-		// Stop-hook history can precede the suffix used for completion.
-		hookReader := reader
-		for {
-			line, _, ok, err := hookReader.prev()
-			if err != nil {
-				return err
-			}
-			if !ok {
-				break
-			}
-			if gjson.GetBytes(line, "type").Str == "system" && gjson.GetBytes(line, "subtype").Str == "stop_hook_summary" && gjson.ValidBytes(line) {
-				hasStopHooks = true
-				break
-			}
-		}
-	}
 	usedPrefix := false
 	var lines []string
 	var assistantID string
-	sawAssistant, boundary, prompt := false, false, false
-	cleanSummary, laterDuration := false, false
+	sawAssistant := false
 	for {
 		var line []byte
 		fromPrefix := len(tail) == 0
@@ -1256,40 +1152,22 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 		msgs, _, _ := extractMessagesFrom([]dagEntry{entry}, 0)
 		isAssistant := slices.ContainsFunc(msgs, func(m ParsedMessage) bool { return !m.IsSystem && m.Role == RoleAssistant })
 		if sawAssistant && (typ == "user" || (isAssistant && (assistantID == "" || gjson.GetBytes(line, "message.id").Str != assistantID))) {
-			boundary = true
-		}
-		if boundary && (!laterDuration || cleanSummary) {
 			break
 		}
 		usedPrefix = usedPrefix || fromPrefix
 		lines = append(lines, entry.line)
-		if boundary && prompt && isAssistant {
-			break
-		}
-		if boundary && slices.ContainsFunc(msgs, isRealClaudeUserMessage) {
-			prompt = true
-		}
 		if !sawAssistant && isAssistant {
 			sawAssistant = true
 			assistantID = gjson.GetBytes(line, "message.id").Str
-		}
-		if !sawAssistant && typ == "system" {
-			for _, d := range collectClaudeTurnDuration(nil, line, 0) {
-				cleanSummary = cleanSummary || (d.summary && d.clean && laterDuration)
-				laterDuration = laterDuration || !d.summary
-			}
 		}
 	}
 	if usedPrefix {
 		slices.Reverse(lines)
 		entries = nil
-		durations = nil
 		var queued []claudeQueuedCommand
 		for _, line := range lines {
 			typ := gjson.Get(line, "type").Str
-			if typ == "system" {
-				durations = collectClaudeTurnDuration(durations, []byte(line), len(entries))
-			} else if typ == "user" || typ == "assistant" {
+			if typ == "user" || typ == "assistant" {
 				entries = append(entries, dagEntry{uuid: gjson.Get(line, "uuid").Str, entryType: typ, lineIndex: len(entries), timestamp: extractTimestamp(line), line: line})
 			} else if typ == "attachment" {
 				if qc, ok := extractQueuedCommand(line); ok {
@@ -1306,9 +1184,6 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 		if status := Classify(msgs, lastAssistantStopReason(msgs), false); status != "" {
 			*scan.termination = new(status)
 		}
-	}
-	if scan.turnOpen != nil {
-		*scan.turnOpen = new(claudeTurnOpen(msgs, entries, durations, claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}}), hasStopHooks))
 	}
 	return nil
 }

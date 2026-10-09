@@ -10,120 +10,77 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestClaudeDeferredSwarmDuration(t *testing.T) {
+func TestClaudeIncrementalWorkIndependentOfPrefix(t *testing.T) {
 	const producer = `"entrypoint":"cli","version":"2.1.296",`
-	lines := []string{
-		`{"type":"user","message":{"content":"first"}}`,
-		`{"type":"assistant","message":{"content":"first reply","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
-		`{"type":"user","message":{"content":"second"}}`,
-		`{"type":"assistant","message":{"content":"second reply","stop_reason":"end_turn"}}`,
-		`{"type":"system","subtype":"turn_duration"}`,
-		`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
-		`{"type":"system","subtype":"turn_duration"}`,
+	const user = `{"type":"user","message":{"content":"hello"}}`
+	const answer = `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}`
+	const duration = `{"type":"system","subtype":"turn_duration"}`
+	var allocations []float64
+	for _, size := range []int{10, 10000} {
+		path := filepath.Join(t.TempDir(), "session.jsonl")
+		prefix := strings.Repeat("{\"type\":\"progress\"}\n", size) + testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(user, answer), producer, 0)
+		writeSourceFile(t, path, prefix+duration+"\n")
+		allocations = append(allocations, testing.AllocsPerRun(3, func() {
+			var status *TerminationStatus
+			var open *bool
+			_, _, _, _, err := claudeParseSessionFrom(path, int64(len(prefix)), claudeIncrementalScan{
+				termination: &status, turnOpen: &open, storedLinearParse: new(true), stored: claudeStoredIdentity{entrypoint: "cli"},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, new(TerminationAwaitingUser), status)
+			assert.Equal(t, new(false), open)
+		}))
 	}
-	for _, end := range []int{5, 6, 7} {
-		session, _ := runClaudeParserTest(t, "session.jsonl", testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(lines[:end]...), producer, 0))
-		assert.Equal(t, TerminationAwaitingUser, session.TerminationStatus)
-		assert.Equal(t, new(end < 7), session.TurnOpen)
-	}
+	assert.Less(t, allocations[1], allocations[0]+100, "append work must stay bounded as the prefix grows")
 }
 
 func TestClaudeTurnDuration(t *testing.T) {
 	const user = `{"type":"user","message":{"content":"hello"}}`
 	const answer = `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}`
 	const duration = `{"type":"system","subtype":"turn_duration"}`
-	type step struct {
-		line   string
-		status TerminationStatus
-		open   bool
-	}
+	const pending = `{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":2}`
+	const summary = `{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`
+	const streaming = `{"type":"assistant","message":{"content":"working","stop_reason":null}}`
 	for _, tc := range []struct {
 		name, producer string
-		steps          []step
+		lines          []string
+		status         TerminationStatus
+		open           bool
 	}{
-		{name: "queued prompt during tools", steps: []step{
-			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}` + "\n" + `{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`, TerminationToolCallPending, true},
-			{`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`, TerminationToolCallPending, true},
-			{`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`, TerminationToolCallPending, true},
-			{`{"type":"user","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`, TerminationClean, true},
-			{`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-		}},
-		{name: "two hookless deferred turns", steps: []step{
-			{answer, TerminationAwaitingUser, true},
-			{user, TerminationClean, true},
-			{answer, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-		}},
-		{name: "deferred swarm during Stop hooks", steps: []step{
-			{answer, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`, TerminationAwaitingUser, true},
-			{user, TerminationClean, true},
-			{answer, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-		}},
-		{name: "pending agents and stop hooks", steps: []step{
-			{answer, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":["blocked"]}`, TerminationAwaitingUser, true},
-			{answer, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":2}`, TerminationAwaitingUser, true},
-			{`{"type":"user","message":{"content":"<task-notification>agent finished</task-notification>"}}`, TerminationAwaitingUser, true},
-			{answer, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-		}},
-		{name: "workflow and invalid counts", steps: []step{
-			{answer, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}`, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingWorkflowCount":"unknown"}`, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":0.5}`, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingWorkflowCount":-1}`, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":null}`, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingWorkflowCount":false}`, TerminationAwaitingUser, true},
-			{`{"type":"system","subtype":"turn_duration","pendingWorkflowCount":0,"pendingBackgroundAgentCount":0}`, TerminationAwaitingUser, false},
-		}},
-		{name: "deferred duration during stream", steps: []step{
-			{answer, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-			{user, TerminationClean, false},
-			{`{"type":"assistant","message":{"content":"working","stop_reason":null}}`, TerminationClean, true},
-			{duration, TerminationClean, true},
-			{answer, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-		}},
-		{name: "duration after next prompt", steps: []step{
-			{answer, TerminationAwaitingUser, true},
-			{user + "\n" + duration, TerminationClean, true},
-			{answer, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-		}},
-		{name: "filtered metadata", steps: []step{
-			{answer, TerminationAwaitingUser, true},
-			{`{"type":"user","isMeta":true,"message":{"content":"metadata"}}`, TerminationAwaitingUser, true},
-			{`{"type":"attachment","attachment":{"type":"file","filename":"example.txt"}}`, TerminationAwaitingUser, true},
-			{duration, TerminationAwaitingUser, false},
-		}},
-		{name: "duration before reply", steps: []step{{duration, TerminationClean, false}, {answer, TerminationAwaitingUser, true}, {duration, TerminationAwaitingUser, false}}},
-		{name: "oldest verified cli", producer: `"entrypoint":"cli","version":"2.1.259",`, steps: []step{{answer, TerminationAwaitingUser, true}, {duration, TerminationAwaitingUser, false}}},
-		{name: "older cli", producer: `"entrypoint":"cli","version":"2.1.200",`, steps: []step{{answer, TerminationAwaitingUser, false}}},
-		{name: "headless", producer: `"entrypoint":"sdk-cli","version":"2.1.266",`, steps: []step{{answer, TerminationAwaitingUser, false}, {duration, TerminationAwaitingUser, false}}},
-		{name: "unversioned", producer: `"entrypoint":"cli",`, steps: []step{{answer, TerminationAwaitingUser, false}}},
-		{name: "sidechain", producer: `"entrypoint":"cli","version":"2.1.266","isSidechain":true,`, steps: []step{{answer, TerminationAwaitingUser, false}, {duration, TerminationAwaitingUser, false}}},
+		{name: "pending duration then deferred flush", lines: []string{user, answer, pending, user, answer, duration}, status: TerminationAwaitingUser},
+		{name: "summary after deferred flush", lines: []string{user, answer, pending, user, answer, duration, summary}, status: TerminationAwaitingUser},
+		{name: "own duration after deferred flush", lines: []string{user, answer, pending, user, answer, duration, summary, duration}, status: TerminationAwaitingUser},
+		{name: "two hookless deferrals", lines: []string{user, answer, user, answer, duration}, status: TerminationAwaitingUser},
+		{name: "pending agents", lines: []string{user, answer, pending}, status: TerminationAwaitingUser, open: true},
+		{name: "pending workflow", lines: []string{user, answer, `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}`}, status: TerminationAwaitingUser, open: true},
+		{name: "zero counts", lines: []string{user, answer, `{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":0,"pendingWorkflowCount":0}`}, status: TerminationAwaitingUser},
+		{name: "reply after duration", lines: []string{user, answer, duration, user, answer}, status: TerminationAwaitingUser, open: true},
+		{name: "stream before duration", lines: []string{user, streaming}, status: TerminationClean, open: true},
+		{name: "stream after duration", lines: []string{user, streaming, duration}, status: TerminationClean},
+		{name: "duration after prompt", lines: []string{user, answer, user, duration}, status: TerminationClean},
+		{name: "metadata after duration", lines: []string{user, answer, duration, `{"type":"user","isMeta":true,"message":{"content":"metadata"}}`}, status: TerminationAwaitingUser},
+		{name: "oldest verified cli", producer: `"entrypoint":"cli","version":"2.1.259",`, lines: []string{user, answer}, status: TerminationAwaitingUser, open: true},
+		{name: "older cli", producer: `"entrypoint":"cli","version":"2.1.200",`, lines: []string{user, answer}, status: TerminationAwaitingUser},
+		{name: "headless", producer: `"entrypoint":"sdk-cli","version":"2.1.296",`, lines: []string{user, answer}, status: TerminationAwaitingUser},
+		{name: "unversioned", producer: `"entrypoint":"cli",`, lines: []string{user, answer}, status: TerminationAwaitingUser},
+		{name: "sidechain", producer: `"entrypoint":"cli","version":"2.1.296","isSidechain":true,`, lines: []string{user, answer}, status: TerminationAwaitingUser},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			producer := tc.producer
 			if producer == "" {
-				producer = `"entrypoint":"cli","version":"2.1.266",`
+				producer = `"entrypoint":"cli","version":"2.1.296",`
 			}
-			content := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(user, answer, duration, user), producer, 0)
-			for i, step := range tc.steps {
-				content += testjsonl.ClaudeChainJSONL(t, step.line+"\n", producer, strings.Count(content, "\n"))
-				session, _ := runClaudeParserTest(t, "session.jsonl", content)
-				assert.Equal(t, step.status, session.TerminationStatus, "record %d", i)
-				assert.Equal(t, new(step.open), session.TurnOpen, "record %d", i)
-			}
+			session, _ := runClaudeParserTest(t, "session.jsonl", testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), producer, 0))
+			assert.Equal(t, tc.status, session.TerminationStatus)
+			assert.Equal(t, new(tc.open), session.TurnOpen)
+		})
+	}
+	for _, count := range []string{`"unknown"`, "0.5", "-1", "null", "false"} {
+		t.Run("invalid pending count "+count, func(t *testing.T) {
+			line := `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":` + count + `}`
+			session, _ := runClaudeParserTest(t, "session.jsonl", testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(user, answer, line), `"entrypoint":"cli","version":"2.1.296",`, 0))
+			assert.Equal(t, TerminationAwaitingUser, session.TerminationStatus)
+			assert.Equal(t, new(true), session.TurnOpen)
 		})
 	}
 	t.Run("fork duration precedes main reply", func(t *testing.T) {
@@ -151,7 +108,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 		assert.Equal(t, new(true), results[0].Session.TurnOpen)
 		assert.Equal(t, "session-uf", results[1].Session.ID)
 		assert.Equal(t, TerminationAwaitingUser, results[1].Session.TerminationStatus)
-		assert.Equal(t, new(false), results[1].Session.TurnOpen)
+		assert.Equal(t, new(true), results[1].Session.TurnOpen)
 	})
 }
 
@@ -186,9 +143,10 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 	const duration = `{"type":"system","subtype":"turn_duration"}`
 	const summary = `{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`
 	for _, tc := range []struct {
-		name    string
-		lines   []string
-		partial bool
+		name     string
+		lines    []string
+		partial  bool
+		producer string
 	}{
 		{name: "parallel tools", lines: []string{
 			user,
@@ -204,18 +162,22 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`, duration,
 		}},
 		{name: "two hookless deferred turns", lines: []string{user, answer, user, answer, duration}},
-		{name: "deferred swarm", lines: []string{user, answer, user, answer, duration, summary, duration}},
+		{name: "deferred swarm", lines: []string{user, answer, `{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`, user, answer, duration, summary, duration}},
 		{name: "streaming run", lines: []string{user,
 			`{"type":"assistant","message":{"id":"reply","content":"working","stop_reason":null}}`,
 			`{"type":"assistant","message":{"id":"reply","content":"done","stop_reason":"end_turn"}}`, summary, duration,
 		}},
 		{name: "pending agents", lines: []string{user, answer, summary, `{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`, user, answer, duration}},
-		{name: "blocked hook", lines: []string{user, answer, user, answer, `{"type":"system","subtype":"stop_hook_summary","hookErrors":["blocked"]}`, duration, answer, summary, duration}},
-		{name: "hooked double deferral", lines: []string{user, answer, user, answer, summary, user, answer, duration, summary, duration}},
+		{name: "older cli", producer: `"entrypoint":"cli","version":"2.1.200",`, lines: []string{user, answer}},
+		{name: "tail without event", lines: []string{user, answer, duration, `{"type":"progress"}`}},
 		{name: "partial final line", lines: []string{user, answer, summary, duration}, partial: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			content := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), `"entrypoint":"cli","version":"2.1.296",`, 0)
+			producer := tc.producer
+			if producer == "" {
+				producer = `"entrypoint":"cli","version":"2.1.296",`
+			}
+			content := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), producer, 0)
 			lines := strings.SplitAfter(content, "\n")
 			path := filepath.Join(t.TempDir(), "session.jsonl")
 			for end := 1; end < len(lines); end++ {
@@ -224,10 +186,15 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 				full, err := parseClaudeSession(path, "project", "local")
 				require.NoError(t, err)
 				require.Len(t, full, 1)
-				if tc.partial {
-					writeSourceFile(t, path, complete+`{"type":"user"`)
-				}
 				for split := 1; split <= end; split++ {
+					writeSourceFile(t, path, strings.Join(lines[:split], ""))
+					prefix, err := parseClaudeSession(path, "project", "local")
+					require.NoError(t, err)
+					require.Len(t, prefix, 1)
+					writeSourceFile(t, path, complete)
+					if tc.partial {
+						writeSourceFile(t, path, complete+`{"type":"user"`)
+					}
 					var status *TerminationStatus
 					var open *bool
 					offset := int64(len(strings.Join(lines[:split], "")))
@@ -236,6 +203,12 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 					})
 					require.NoError(t, err, "split %d end %d", split, end)
 					assert.Equal(t, new(full[0].Session.TerminationStatus), status, "split %d end %d", split, end)
+					if split == end || (tc.name == "tail without event" && split == 3 && end == 4) {
+						assert.Nil(t, open, "a tail without a turn event preserves storage")
+					}
+					if open == nil {
+						open = prefix[0].Session.TurnOpen
+					}
 					assert.Equal(t, full[0].Session.TurnOpen, open, "split %d end %d", split, end)
 					assert.Equal(t, int64(len(complete))-offset, consumed)
 				}
