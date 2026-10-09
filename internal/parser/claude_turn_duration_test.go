@@ -14,7 +14,7 @@ func TestClaudeDeferredSwarmDuration(t *testing.T) {
 	const producer = `"entrypoint":"cli","version":"2.1.296",`
 	lines := []string{
 		`{"type":"user","message":{"content":"first"}}`,
-		`{"type":"assistant","message":{"content":"first reply","stop_reason":"end_turn"}}`,
+		`{"type":"assistant","message":{"content":"first reply","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
 		`{"type":"user","message":{"content":"second"}}`,
 		`{"type":"assistant","message":{"content":"second reply","stop_reason":"end_turn"}}`,
 		`{"type":"system","subtype":"turn_duration"}`,
@@ -41,6 +41,29 @@ func TestClaudeTurnDuration(t *testing.T) {
 		name, producer string
 		steps          []step
 	}{
+		{name: "queued prompt during tools", steps: []step{
+			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}` + "\n" + `{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`, TerminationToolCallPending, true},
+			{`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`, TerminationToolCallPending, true},
+			{`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`, TerminationToolCallPending, true},
+			{`{"type":"user","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`, TerminationClean, true},
+			{`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`, TerminationAwaitingUser, true},
+			{duration, TerminationAwaitingUser, false},
+		}},
+		{name: "two hookless deferred turns", steps: []step{
+			{answer, TerminationAwaitingUser, true},
+			{user, TerminationClean, true},
+			{answer, TerminationAwaitingUser, true},
+			{duration, TerminationAwaitingUser, false},
+		}},
+		{name: "deferred swarm during Stop hooks", steps: []step{
+			{answer, TerminationAwaitingUser, true},
+			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`, TerminationAwaitingUser, true},
+			{user, TerminationClean, true},
+			{answer, TerminationAwaitingUser, true},
+			{duration, TerminationAwaitingUser, true},
+			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`, TerminationAwaitingUser, true},
+			{duration, TerminationAwaitingUser, false},
+		}},
 		{name: "pending agents and stop hooks", steps: []step{
 			{answer, TerminationAwaitingUser, true},
 			{`{"type":"system","subtype":"stop_hook_summary","hookErrors":["blocked"]}`, TerminationAwaitingUser, true},
@@ -173,6 +196,14 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"two"}]}}`, answer, duration,
 		}},
+		{name: "queued prompt during tools", lines: []string{user,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
+			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
+			`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`, duration,
+		}},
+		{name: "two hookless deferred turns", lines: []string{user, answer, user, answer, duration}},
 		{name: "deferred swarm", lines: []string{user, answer, user, answer, duration, summary, duration}},
 		{name: "streaming run", lines: []string{user,
 			`{"type":"assistant","message":{"id":"reply","content":"working","stop_reason":null}}`,

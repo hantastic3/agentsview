@@ -19,6 +19,8 @@ The latest release is
   toast; sessions that finish while trashed can toast after restoration. Missed
   updates arrive within five minutes while the app runs.
 
+- Claude Code's waiting indicator now updates during incremental sync.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

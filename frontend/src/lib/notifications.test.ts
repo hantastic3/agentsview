@@ -138,6 +138,14 @@ describe("desktop notification watcher", () => {
     await change({ termination_status: "awaiting_user" });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
+  it("stays silent when the detail read reclassifies a session as automated", async () => {
+    await start();
+    session.mockImplementation(async () => ({ ...row, is_automated: true }));
+    await change({ termination_status: "awaiting_user" });
+    await change();
+    expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
   it.each([{ last_reply_id: "reply-2" }, { termination_status: "clean" }, { turn_open: true }])(
     "retries an unfinished or changed re-read: %j",
     async (patch) => {

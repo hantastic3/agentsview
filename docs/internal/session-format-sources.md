@@ -183,13 +183,15 @@ fixtures retain this field; missing identities remain source-local.
   timing and running tasks, rather than the active turn. Stop hooks run before
   the turn's own duration, and zero pending counts become absent fields.
   SQLite's `turn_open` closes `end_turn` replies with zero or absent pending
-  counts only after a clean `stop_hook_summary` or a preceding duration since
-  the previous turn's last reply. The first turn has no deferred predecessor.
-  Streaming replies stay open. A swarm deferred across two hookless turns can
-  leave both open. `Classify` owns status; incremental reads classify complete
-  records from the last assistant run, extending to the previous reply when
-  duration attribution needs it. Rechecked both writers and the hook builder
-  in the installed bundle, plus deferred-swarm and split-boundary fixtures.
+  counts when the session has no `stop_hook_summary`, or after a clean summary
+  or a preceding duration since the previous `end_turn` reply. Queued prompts
+  and tool-use replies don't start turns. The first turn has no deferred
+  predecessor. Streaming replies stay open. `Classify` owns status; incremental
+  reads classify complete records from the last assistant run, extending to the
+  previous reply when duration attribution needs it. Rechecked both writers and
+  the hook builder in the installed bundle; queued-prompt, hookless
+  deferred-swarm, and split-boundary fixtures reverify the parser's completion
+  rules on 2026-10-09.
   Public producer source is unavailable.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with

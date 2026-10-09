@@ -18382,6 +18382,60 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 }
 
 func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		open  []bool
+	}{
+		{name: "queued prompt during tools", lines: []string{
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
+			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
+			`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`,
+			`{"type":"system","subtype":"turn_duration"}`,
+		}, open: []bool{true, true, true, true, true, false}},
+		{name: "two hookless deferred turns", lines: []string{
+			`{"type":"assistant","message":{"content":"first reply","stop_reason":"end_turn"}}`,
+			`{"type":"user","message":{"content":"second"}}`,
+			`{"type":"assistant","message":{"content":"second reply","stop_reason":"end_turn"}}`,
+			`{"type":"system","subtype":"turn_duration"}`,
+		}, open: []bool{true, true, true, false}},
+		{name: "deferred swarm during Stop hooks", lines: []string{
+			`{"type":"assistant","message":{"content":"first reply","stop_reason":"end_turn"}}`,
+			`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
+			`{"type":"user","message":{"content":"second"}}`,
+			`{"type":"assistant","message":{"content":"second reply","stop_reason":"end_turn"}}`,
+			`{"type":"system","subtype":"turn_duration"}`,
+			`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
+			`{"type":"system","subtype":"turn_duration"}`,
+		}, open: []bool{true, true, true, true, true, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			const producer = `"entrypoint":"cli","version":"2.1.296",`
+			initial := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)), producer, 0)
+			path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
+			env.engine.SyncAll(t.Context(), nil)
+			for i, line := range tc.lines {
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+				require.NoError(t, err)
+				_, err = f.WriteString(testjsonl.ClaudeChainJSONL(t, line+"\n", producer, i+1))
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				env.engine.SyncPaths([]string{path})
+				session, err := env.db.GetSessionFull(t.Context(), "notify")
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				assert.Equal(t, tc.open[i], session.TurnOpen, "record %d", i)
+				if i == len(tc.lines)-1 {
+					require.NotNil(t, session.TerminationStatus)
+					assert.Equal(t, "awaiting_user", *session.TerminationStatus)
+					assert.True(t, session.LastWriteIncremental)
+				}
+			}
+		})
+	}
 	env := setupTestEnv(t)
 	const producer = `"entrypoint":"cli","version":"2.1.266",`
 	initial := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)), producer, 0)

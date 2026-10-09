@@ -51,6 +51,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
 
   function silent(row: DbSession): boolean {
     return (
+      row.is_automated ||
       row.relationship_type === "subagent" ||
       (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus())
     );

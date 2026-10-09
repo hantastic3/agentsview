@@ -504,6 +504,7 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	answered := claudeAnsweredUUIDs(results)
+	hasStopHooks := slices.ContainsFunc(durations, func(d claudeTurnDuration) bool { return d.summary })
 
 	for i := range results {
 		results[i].Session.RelationshipType = PromoteParentlessWorker(
@@ -518,7 +519,7 @@ func claudeParseFile(
 			lastAssistantStopReason(results[i].Messages),
 			lastLineFailed,
 		)
-		results[i].Session.TurnOpen = new(claudeTurnOpen(results[i].Messages, entries, durations, answered))
+		results[i].Session.TurnOpen = new(claudeTurnOpen(results[i].Messages, entries, durations, answered, hasStopHooks))
 		results[i].Session.claudeRenameSeen = renameSeen
 	}
 
@@ -802,7 +803,7 @@ func claudeAnsweredUUIDs(results []ParseResult) map[string]bool {
 	return answered
 }
 
-func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, answered map[string]bool) bool {
+func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, answered map[string]bool, hasStopHooks bool) bool {
 	for replyIndex, msg := range slices.Backward(messages) {
 		if msg.IsSystem || msg.Role != RoleAssistant {
 			continue
@@ -829,10 +830,8 @@ func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []cl
 				}
 			}
 			previousUUID := ""
-			prompt := false
 			for _, earlier := range slices.Backward(messages[:replyIndex]) {
-				prompt = prompt || isRealClaudeUserMessage(earlier)
-				if prompt && !earlier.IsSystem && earlier.Role == RoleAssistant {
+				if !earlier.IsSystem && earlier.Role == RoleAssistant && earlier.StopReason == "end_turn" {
 					previousUUID = earlier.SourceUUID
 					break
 				}
@@ -857,7 +856,7 @@ func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []cl
 					continue
 				}
 				if duration.position > entry.lineIndex {
-					open = duration.pending != 0 || duration.workflows != 0 || (!cleanSummary && !priorDuration)
+					open = duration.pending != 0 || duration.workflows != 0 || (hasStopHooks && !cleanSummary && !priorDuration)
 				}
 				priorDuration = true
 			}
@@ -1208,6 +1207,26 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 	}
 	defer f.Close()
 	reader := claudeBackwardReader{f: f, pos: offset}
+	hasStopHooks := slices.ContainsFunc(tail, func(line string) bool {
+		return gjson.Get(line, "subtype").Str == "stop_hook_summary" && gjson.Get(line, "type").Str == "system"
+	})
+	if scan.turnOpen != nil && !hasStopHooks {
+		// Stop-hook history can precede the suffix used for completion.
+		hookReader := reader
+		for {
+			line, _, ok, err := hookReader.prev()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
+			if gjson.GetBytes(line, "type").Str == "system" && gjson.GetBytes(line, "subtype").Str == "stop_hook_summary" && gjson.ValidBytes(line) {
+				hasStopHooks = true
+				break
+			}
+		}
+	}
 	usedPrefix := false
 	var lines []string
 	var assistantID string
@@ -1271,7 +1290,7 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 			if typ == "system" {
 				durations = collectClaudeTurnDuration(durations, []byte(line), len(entries))
 			} else if typ == "user" || typ == "assistant" {
-				entries = append(entries, dagEntry{uuid: gjson.Get(line, "uuid").Str, entryType: typ, lineIndex: len(entries), line: line})
+				entries = append(entries, dagEntry{uuid: gjson.Get(line, "uuid").Str, entryType: typ, lineIndex: len(entries), timestamp: extractTimestamp(line), line: line})
 			} else if typ == "attachment" {
 				if qc, ok := extractQueuedCommand(line); ok {
 					queued = append(queued, qc)
@@ -1289,7 +1308,7 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 		}
 	}
 	if scan.turnOpen != nil {
-		*scan.turnOpen = new(claudeTurnOpen(msgs, entries, durations, claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})))
+		*scan.turnOpen = new(claudeTurnOpen(msgs, entries, durations, claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}}), hasStopHooks))
 	}
 	return nil
 }
