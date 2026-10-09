@@ -1,10 +1,10 @@
 import { m } from "../../i18n/index.js";
 
 export type SettingsPanelId =
-  | "notifications"
   | "appearance"
   | "language"
   | "date-ranges"
+  | "notifications"
   | "terminal"
   | "agent-directories"
   | "tool-result-images"
@@ -30,14 +30,6 @@ export function settingsPanels(): SettingsPanelMeta[] {
 
   return [
     {
-      id: "notifications",
-      label: m.settings_notifications_title(),
-      title: m.settings_notifications_title(),
-      description: m.settings_notifications_description(),
-      group: preferences,
-      keywords: m.settings_notifications_keywords(),
-    },
-    {
       id: "appearance",
       label: m.appearance_title(),
       title: m.appearance_title(),
@@ -60,6 +52,14 @@ export function settingsPanels(): SettingsPanelMeta[] {
       description: m.settings_date_ranges_description(),
       group: preferences,
       keywords: m.settings_search_keywords_date_ranges(),
+    },
+    {
+      id: "notifications",
+      label: m.settings_notifications_title(),
+      title: m.settings_notifications_title(),
+      description: m.settings_notifications_description(),
+      group: preferences,
+      keywords: m.settings_notifications_keywords(),
     },
     {
       id: "terminal",

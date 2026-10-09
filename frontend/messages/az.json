@@ -2469,7 +2469,7 @@
   "settings_notifications_unavailable": "Bu tətbiqdə masaüstü bildirişləri əlçatan deyil.",
   "settings_notifications_permission_denied": "Bildiriş icazəsi rədd edildi. Sistem parametrlərində AgentsView üçün bildirişlərə icazə verin.",
   "settings_notifications_enable": "Masaüstü bildirişlərini aktivləşdir",
-  "settings_notifications_turn_end_hint": "Yalnız masaüstü tətbiqində. Agent növbəsini bitirib sizi gözləyəndə bildiriş alırsınız. Bildirişlər əməliyyat sisteminin AgentsView üçün bildiriş parametrlərinə uyğun göstərilir.",
+  "settings_notifications_turn_end_hint": "Bildirişlər sisteminizin AgentsView üçün bildiriş parametrlərinə uyğun göstərilir.",
   "notification_turn_end_body": "Agent bu növbəni bitirib sizi gözləyir.",
   "notification_turn_end_title_suffix": "{name}: növbə tamamlandı"
 }

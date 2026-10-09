@@ -98,9 +98,7 @@ it("shows OS notification settings guidance and keeps the saved toggle on load",
   vi.stubGlobal("__TAURI__", { notification: plugin });
   const { getByRole, getByText, queryByRole } = render(NotificationsSettings);
   expect(
-    getByText(
-      "Desktop app only. You are notified when an agent finishes its turn and waits for you. Toasts follow the OS notification settings for AgentsView.",
-    ),
+    getByText("Notifications follow your system's notification settings for AgentsView."),
   ).toBeTruthy();
   await waitFor(() =>
     expect(
