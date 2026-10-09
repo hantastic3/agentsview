@@ -36,17 +36,16 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 function turnKey(row: DbSession): string {
-  return `${row.ended_at}:${row.user_message_count}:${row.total_output_tokens}`;
+  return `${row.user_message_count}:${row.total_output_tokens}`;
 }
 
 const FRESHNESS_MS = 10 * 60_000;
-const RETENTION_MS = 24 * 60 * 60_000;
 const SAFETY_NET_REFRESH_MS = 5 * 60_000;
 
 export function startNotificationWatcher(viewingId: () => string | null): () => void {
-  const seen = new Map<string, { key?: string; lastSeen: number }>();
+  const seen = new Map<string, { waitingKey?: string }>();
   const startedAt = Date.now();
-  let lastSuccessfulRefresh = startedAt;
+  let coveredSince = startedAt;
   let stopped = false;
   let running = false;
   let pending = false;
@@ -54,7 +53,6 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
   function silent(row: DbSession): boolean {
     return (
       row.relationship_type === "subagent" ||
-      row.is_automated ||
       (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus())
     );
   }
@@ -81,9 +79,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       let cursor: string | undefined;
       do {
         const result = await SessionsService.getApiV1Sessions({
-          active_since: new Date(
-            Math.min(fetchedAt - FRESHNESS_MS, lastSuccessfulRefresh),
-          ).toISOString(),
+          active_since: new Date(Math.min(fetchedAt - FRESHNESS_MS, coveredSince)).toISOString(),
           each_row: true,
           include_one_shot: true,
           cursor,
@@ -92,33 +88,36 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         cursor = result.next_cursor;
       } while (cursor && !stopped);
       if (stopped) return;
+      let readsSucceeded = true;
       for (const row of rows) {
-        const previous =
-          seen.get(row.id) ??
-          (Date.parse(row.started_at ?? row.created_at) >= startedAt - 5_000
-            ? { lastSeen: fetchedAt, key: undefined }
-            : undefined);
         const waiting = row.termination_status === "awaiting_user";
         const key = turnKey(row);
-        seen.set(row.id, {
-          key: previous ? previous.key : waiting ? key : undefined,
-          lastSeen: fetchedAt,
-        });
-        if (!previous || !waiting || previous.key === key) continue;
+        let previous = seen.get(row.id);
+        if (!previous) {
+          previous = {};
+          seen.set(row.id, previous);
+          if (!(Date.parse(row.created_at) >= startedAt)) {
+            previous.waitingKey = waiting ? key : undefined;
+            continue;
+          }
+        }
+        if (!waiting) {
+          previous.waitingKey = undefined;
+          continue;
+        }
+        if (previous.waitingKey === key) continue;
         try {
           const current = await SessionsService.getApiV1SessionsById({ id: row.id });
           if (stopped) return;
-          if (current.termination_status !== "awaiting_user" || turnKey(current) !== key) continue;
-          send(current);
-          seen.set(row.id, { key, lastSeen: fetchedAt });
+          if (current.termination_status === "awaiting_user" && turnKey(current) === key)
+            send(current);
+          previous.waitingKey = key;
         } catch (err) {
+          readsSucceeded = false;
           console.warn("notification turn-end read failed", err);
         }
       }
-      for (const [id, entry] of seen) {
-        if (entry.lastSeen < fetchedAt - RETENTION_MS) seen.delete(id);
-      }
-      lastSuccessfulRefresh = fetchedAt;
+      if (readsSucceeded) coveredSince = fetchedAt;
     } catch (err) {
       console.warn("notification session read failed", err);
     } finally {

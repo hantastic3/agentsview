@@ -52,6 +52,7 @@ beforeEach(() => {
     agent: "claude",
     project: "demo",
     display_name: "Fix login",
+    created_at: "2026-10-07T11:00:00Z",
     ended_at: "2026-10-07T12:00:00Z",
     message_count: 2,
     user_message_count: 1,
@@ -88,17 +89,16 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([
-    { user_message_count: 2 },
-    { total_output_tokens: 200 },
-    { ended_at: "2026-10-07T12:01:00Z" },
-  ])("notifies on a new waiting turn: %j", async (patch) => {
-    row.termination_status = "awaiting_user";
-    await start();
-    await change(patch);
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
+  it.each([{ user_message_count: 2 }, { total_output_tokens: 200 }])(
+    "notifies on a new waiting turn: %j",
+    async (patch) => {
+      row.termination_status = "awaiting_user";
+      await start();
+      await change(patch);
+      await change();
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    },
+  );
   it("notifies after a rewind and resend repeats the completed turn's counts", async () => {
     await start();
     await change({ termination_status: "awaiting_user" });
@@ -113,11 +113,11 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
   });
   it.each([
-    { started_at: "2026-10-07T11:59:55Z", sent: true },
-    { started_at: "2026-10-07T12:01:00Z", sent: true },
-    { started_at: "2026-10-07T11:59:54Z", sent: false },
-    { started_at: null, created_at: "2026-10-07T12:01:00Z", sent: true },
-    { started_at: "2026-10-07T11:00:00Z", created_at: "2026-10-07T12:01:00Z", sent: false },
+    { created_at: "2026-10-07T11:59:59Z", sent: false },
+    { created_at: "2026-10-07T12:00:00Z", sent: true },
+    { created_at: "2026-10-07T12:01:00Z", sent: true },
+    { started_at: "2026-10-07T12:01:00Z", created_at: "2026-10-07T11:00:00Z", sent: false },
+    { started_at: "2026-10-07T11:00:00Z", created_at: "2026-10-07T12:01:00Z", sent: true },
   ])("handles a first-seen waiting session: %j", async ({ sent, ...patch }) => {
     list.mockResolvedValueOnce({ sessions: [], total: 0 });
     await start();
@@ -126,17 +126,22 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledTimes(sent ? 1 : 0);
   });
-  it("ignores metadata and status flicker with the same key", async () => {
+  it("keeps a renamed completion silent when ended_at changes", async () => {
     row.termination_status = "awaiting_user";
     await start();
-    await change({ message_count: 3, display_name: "Renamed" });
-    await change({ termination_status: undefined });
-    await change({ termination_status: "clean" });
-    await change({ termination_status: "awaiting_user", message_count: 4 });
+    await change({ message_count: 3, display_name: "Renamed", ended_at: "2026-10-07T12:01:00Z" });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
     expect(session).not.toHaveBeenCalled();
   });
-  it.each([{ relationship_type: "subagent" }, { is_automated: true }, {}])(
+  it("notifies after a non-waiting refresh between equal keys", async () => {
+    row.termination_status = "awaiting_user";
+    await start();
+    await change({ termination_status: "clean" });
+    await change({ termination_status: "awaiting_user" });
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it.each([{ relationship_type: "subagent" }, {}])(
     "remembers silent completions: %j",
     async (patch) => {
       await start("session");
@@ -160,7 +165,7 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it.each([{ total_output_tokens: 200 }, { termination_status: "clean" }])(
-    "retries a changed re-read: %j",
+    "records a changed re-read silently: %j",
     async (patch) => {
       await start();
       session.mockResolvedValueOnce({ ...row, ...patch } as Awaited<
@@ -169,15 +174,30 @@ describe("desktop notification watcher", () => {
       await change({ termination_status: "awaiting_user" });
       expect(plugin.sendNotification).not.toHaveBeenCalled();
       await change();
-      expect(plugin.sendNotification).toHaveBeenCalledOnce();
-      expect(session).toHaveBeenCalledTimes(2);
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+      expect(session).toHaveBeenCalledOnce();
     },
   );
-  it("retries a failed re-read", async () => {
+  it("retries a failed re-read after ten idle minutes", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await start();
     session.mockRejectedValueOnce(new Error("unavailable"));
-    await change({ termination_status: "awaiting_user" });
+    vi.setSystemTime(new Date("2026-10-07T12:01:00Z"));
+    await change({ termination_status: "awaiting_user", ended_at: "2026-10-07T12:01:00Z" });
+    list.mockImplementation(async (params) => ({
+      sessions: Date.parse(row.ended_at!) >= Date.parse(params!.active_since!) ? [row] : [],
+      total: 1,
+    }));
+    vi.setSystemTime(new Date("2026-10-07T12:20:00Z"));
+    await change();
+    expect(list).toHaveBeenLastCalledWith({
+      active_since: "2026-10-07T12:00:00.000Z",
+      each_row: true,
+      include_one_shot: true,
+      cursor: undefined,
+    });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(session).toHaveBeenCalledTimes(2);
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
@@ -245,7 +265,7 @@ describe("desktop notification watcher", () => {
     await change({ total_output_tokens: 200 });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("prunes entries unseen for 24 hours", async () => {
+  it("notifies on the next turn after 24 idle hours", async () => {
     row.termination_status = "awaiting_user";
     await start();
     list.mockResolvedValue({ sessions: [], total: 0 });
@@ -253,8 +273,7 @@ describe("desktop notification watcher", () => {
     await change();
     list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
     await change({ total_output_tokens: 200 });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change({ total_output_tokens: 300 });
+    await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("unsubscribes and cancels refreshes on stop", async () => {
