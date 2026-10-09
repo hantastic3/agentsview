@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/tidwall/gjson"
@@ -210,42 +209,38 @@ func (lr *lineReader) readLineBytes() ([]byte, error) {
 
 // readJSONLFrom opens a JSONL file, seeks to offset, and
 // calls fn for each valid JSON line. Returns the number of
-// bytes consumed relative to offset, truncation, and any I/O error. The
+// bytes consumed (relative to offset) and any I/O error. The
 // returned byte count covers only complete lines, so callers
 // can use offset+consumed as a safe resume point even if the
 // file had a partially written line at EOF.
 func readJSONLFrom(
 	path string, offset int64, fn func(line string),
-) (consumed int64, truncated bool, err error) {
+) (consumed int64, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, false, fmt.Errorf("open %s: %w", path, err)
+		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return 0, false, fmt.Errorf(
+		return 0, fmt.Errorf(
 			"seek %s to %d: %w", path, offset, err,
 		)
 	}
 
 	lr := newLineReader(f, maxLineSize)
 	defer releaseLineReader(lr)
-	var lastLineHasData, lastLineValid bool
 	for {
 		line, ok := lr.next()
 		if !ok {
 			break
 		}
-		lastLineHasData = strings.TrimSpace(line) != ""
-		lastLineValid = gjson.Valid(line)
-		if lastLineValid {
+		if gjson.Valid(line) {
 			fn(line)
 			// Track offset through last valid JSON line
 			// so partial lines at EOF are not skipped.
 			consumed = lr.bytesRead
 		}
 	}
-	truncated = lastLineHasData && !lastLineValid && !fileEndsWithNewline(f, offset+lr.bytesRead)
-	return consumed, truncated, lr.Err()
+	return consumed, lr.Err()
 }

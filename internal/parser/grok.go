@@ -274,7 +274,7 @@ func parseGrokUsageEvents(
 	}
 	turn := 0
 	var costErr error
-	_, _, err := readJSONLFrom(path, 0, func(line string) {
+	_, err := readJSONLFrom(path, 0, func(line string) {
 		if costErr != nil {
 			return
 		}
@@ -599,7 +599,7 @@ func parseGrokUpdateTimestampAnchors(
 	path string,
 ) ([]grokTimestampAnchor, error) {
 	var builder grokTimestampAnchorBuilder
-	_, _, err := readJSONLFrom(path, 0, func(line string) {
+	_, err := readJSONLFrom(path, 0, func(line string) {
 		if !gjson.Valid(line) {
 			return
 		}

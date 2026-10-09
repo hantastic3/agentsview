@@ -30,6 +30,10 @@ agentsview session list --server http://127.0.0.1:8080 --json
 agentsview session search "regression" --pg --json
 ```
 
+`last_reply_id` and `turn_open` are SQLite-only notification fields. Read-only
+mirrors omit them. Legacy Claude rows read NULL `turn_open` as open until the
+next parse writes a verdict.
+
 ## Stability
 
 - **Additive-only.** New fields may appear at any time. Existing fields are

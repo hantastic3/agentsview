@@ -15875,7 +15875,6 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
 				StoredSessionName:         storedSessionName,
-				StoredTerminationStatus:   inc.TerminationStatus,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
 			},
 		)

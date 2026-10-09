@@ -760,10 +760,16 @@ type claudeTurnDuration struct {
 	position  int
 	pending   int64
 	workflows int64
+	summary   bool
+	clean     bool
 }
 
 func collectClaudeTurnDuration(durations []claudeTurnDuration, line []byte, position int) []claudeTurnDuration {
-	if gjson.GetBytes(line, "subtype").Str == "turn_duration" {
+	switch gjson.GetBytes(line, "subtype").Str {
+	case "stop_hook_summary":
+		errors := gjson.GetBytes(line, "hookErrors")
+		durations = append(durations, claudeTurnDuration{position: position, summary: true, clean: errors.IsArray() && len(errors.Array()) == 0})
+	case "turn_duration":
 		durations = append(durations, claudeTurnDuration{
 			position:  position,
 			pending:   claudePendingCount(gjson.GetBytes(line, "pendingBackgroundAgentCount")),
@@ -797,7 +803,7 @@ func claudeAnsweredUUIDs(results []ParseResult) map[string]bool {
 }
 
 func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, answered map[string]bool) bool {
-	for _, msg := range slices.Backward(messages) {
+	for replyIndex, msg := range slices.Backward(messages) {
 		if msg.IsSystem || msg.Role != RoleAssistant {
 			continue
 		}
@@ -822,12 +828,40 @@ func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []cl
 					break
 				}
 			}
-			for _, duration := range slices.Backward(durations) {
-				if duration.position > entry.lineIndex && (end < 0 || duration.position <= end) {
-					return duration.pending != 0 || duration.workflows != 0
+			previousUUID := ""
+			prompt := false
+			for _, earlier := range slices.Backward(messages[:replyIndex]) {
+				prompt = prompt || isRealClaudeUserMessage(earlier)
+				if prompt && !earlier.IsSystem && earlier.Role == RoleAssistant {
+					previousUUID = earlier.SourceUUID
+					break
 				}
 			}
-			return true
+			previousReply := -1
+			for _, earlier := range entries {
+				if previousUUID != "" && earlier.uuid == previousUUID {
+					previousReply = earlier.lineIndex
+					break
+				}
+			}
+			priorDuration, cleanSummary := previousReply < 0, false
+			open := true
+			for _, duration := range durations {
+				if duration.position <= previousReply || (end >= 0 && duration.position > end) {
+					continue
+				}
+				if duration.summary {
+					if duration.position > entry.lineIndex {
+						cleanSummary = duration.clean
+					}
+					continue
+				}
+				if duration.position > entry.lineIndex {
+					open = duration.pending != 0 || duration.workflows != 0 || (!cleanSummary && !priorDuration)
+				}
+				priorDuration = true
+			}
+			return open
 		}
 		return false
 	}
@@ -877,7 +911,6 @@ type claudeStoredIdentity struct {
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
 	termination   **TerminationStatus
-	storedStatus  TerminationStatus
 	turnOpen      **bool
 	startOrdinal  int
 	lastEntryUUID string
@@ -918,6 +951,7 @@ func claudeParseSessionFrom(
 	var (
 		entries        []dagEntry
 		durations      []claudeTurnDuration
+		verdictLines   []string
 		queuedCommands []claudeQueuedCommand
 		subagentMap    = make(map[string]string)
 		lineIndex      = startOrdinal
@@ -932,9 +966,12 @@ func claudeParseSessionFrom(
 		appendedCustomTitle    string
 	)
 
-	consumed, truncated, err := readJSONLFrom(
+	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
 			line = resolveClaudePersistedToolResults(path, line)
+			if scan.termination != nil || scan.turnOpen != nil {
+				verdictLines = append(verdictLines, line)
+			}
 			if ts := extractTimestamp(line); !ts.IsZero() {
 				if ts.After(latestTS) {
 					latestTS = ts
@@ -957,9 +994,7 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "system" {
-				if claudeWritesTurnDuration(line) {
-					durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
-				}
+				durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
 				); ok {
@@ -1081,7 +1116,7 @@ func claudeParseSessionFrom(
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
-		if err := scan.setVerdicts(nil, entries, durations, truncated); err != nil {
+		if err := scan.setVerdicts(path, offset, verdictLines, nil, entries, durations); err != nil {
 			return nil, nil, time.Time{}, 0, err
 		}
 		return nil, links, latestTS, consumed, nil
@@ -1156,53 +1191,106 @@ func claudeParseSessionFrom(
 	if latestTS.After(endedAt) {
 		endedAt = latestTS
 	}
-	if err := scan.setVerdicts(msgs, entries, durations, truncated); err != nil {
+	if err := scan.setVerdicts(path, offset, verdictLines, msgs, entries, durations); err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
 
 	return msgs, links, endedAt, consumed, nil
 }
 
-func (scan claudeIncrementalScan) setVerdicts(msgs []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, truncated bool) error {
-	hasAssistant := slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem && msg.Role == RoleAssistant })
-	var status *TerminationStatus
-	if truncated {
-		status = new(TerminationTruncated)
-	} else if hasAssistant {
-		status = new(Classify(msgs, lastAssistantStopReason(msgs), false))
-	} else if scan.storedStatus == TerminationTruncated {
-		return ErrClaudeIncrementalNeedsFullParse
-	} else if scan.storedStatus == TerminationAwaitingUser || scan.storedStatus == TerminationClean {
-		status = new(scan.storedStatus)
-		if slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem }) {
-			status = new(TerminationClean)
+func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []string, msgs []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration) error {
+	if scan.termination == nil && scan.turnOpen == nil {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	reader := claudeBackwardReader{f: f, pos: offset}
+	usedPrefix := false
+	var lines []string
+	var assistantID string
+	sawAssistant, boundary, prompt := false, false, false
+	cleanSummary, laterDuration := false, false
+	for {
+		var line []byte
+		fromPrefix := len(tail) == 0
+		if fromPrefix {
+			var ok bool
+			line, _, ok, err = reader.prev()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
+		} else {
+			line = []byte(tail[len(tail)-1])
+			tail = tail[:len(tail)-1]
 		}
+		if !gjson.ValidBytes(line) {
+			continue
+		}
+		typ := gjson.GetBytes(line, "type").Str
+		entry := dagEntry{entryType: typ, line: resolveClaudePersistedToolResults(path, string(line))}
+		msgs, _, _ := extractMessagesFrom([]dagEntry{entry}, 0)
+		isAssistant := slices.ContainsFunc(msgs, func(m ParsedMessage) bool { return !m.IsSystem && m.Role == RoleAssistant })
+		if sawAssistant && (typ == "user" || (isAssistant && (assistantID == "" || gjson.GetBytes(line, "message.id").Str != assistantID))) {
+			boundary = true
+		}
+		if boundary && (!laterDuration || cleanSummary) {
+			break
+		}
+		usedPrefix = usedPrefix || fromPrefix
+		lines = append(lines, entry.line)
+		if boundary && prompt && isAssistant {
+			break
+		}
+		if boundary && slices.ContainsFunc(msgs, isRealClaudeUserMessage) {
+			prompt = true
+		}
+		if !sawAssistant && isAssistant {
+			sawAssistant = true
+			assistantID = gjson.GetBytes(line, "message.id").Str
+		}
+		if !sawAssistant && typ == "system" {
+			for _, d := range collectClaudeTurnDuration(nil, line, 0) {
+				cleanSummary = cleanSummary || (d.summary && d.clean && laterDuration)
+				laterDuration = laterDuration || !d.summary
+			}
+		}
+	}
+	if usedPrefix {
+		slices.Reverse(lines)
+		entries = nil
+		durations = nil
+		var queued []claudeQueuedCommand
+		for _, line := range lines {
+			typ := gjson.Get(line, "type").Str
+			if typ == "system" {
+				durations = collectClaudeTurnDuration(durations, []byte(line), len(entries))
+			} else if typ == "user" || typ == "assistant" {
+				entries = append(entries, dagEntry{uuid: gjson.Get(line, "uuid").Str, entryType: typ, lineIndex: len(entries), line: line})
+			} else if typ == "attachment" {
+				if qc, ok := extractQueuedCommand(line); ok {
+					queued = append(queued, qc)
+				}
+			}
+		}
+		entries = mergeClaudeAssistantMessageChunks(entries)
+		msgs, _, _ = extractMessagesFrom(entries, 0)
+		msgs = mergeQueuedCommands(msgs, queued, 0, queuedCommandMessage)
 	}
 	if scan.termination != nil {
-		*scan.termination = status
-	}
-	if scan.turnOpen != nil {
-		if hasAssistant {
-			answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
-			*scan.turnOpen = new(claudeTurnOpen(msgs, entries, durations, answered))
-		} else if len(durations) > 0 && scan.storedStatus == TerminationAwaitingUser {
-			answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
-			end := -1
-			for _, entry := range entries {
-				if answered[entry.uuid] {
-					end = entry.lineIndex
-					break
-				}
-			}
-			for _, duration := range slices.Backward(durations) {
-				if end < 0 || duration.position <= end {
-					*scan.turnOpen = new(duration.pending != 0 || duration.workflows != 0)
-					break
-				}
-			}
+		*scan.termination = nil
+		if status := Classify(msgs, lastAssistantStopReason(msgs), false); status != "" {
+			*scan.termination = new(status)
 		}
 	}
-
+	if scan.turnOpen != nil {
+		*scan.turnOpen = new(claudeTurnOpen(msgs, entries, durations, claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})))
+	}
 	return nil
 }
 

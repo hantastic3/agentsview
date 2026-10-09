@@ -372,7 +372,6 @@ func (p *claudeProvider) ParseIncremental(
 		req.Offset,
 		claudeIncrementalScan{
 			termination:   &termination,
-			storedStatus:  TerminationStatus(req.StoredTerminationStatus),
 			turnOpen:      &turnOpen,
 			startOrdinal:  req.StartOrdinal,
 			lastEntryUUID: req.LastEntryUUID,

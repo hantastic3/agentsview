@@ -18429,4 +18429,5 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 	require.NotNil(t, session.TerminationStatus)
 	assert.Equal(t, "awaiting_user", *session.TerminationStatus)
 	assert.False(t, session.LastWriteIncremental)
+	assert.False(t, session.TurnOpen)
 }

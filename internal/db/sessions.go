@@ -43,6 +43,9 @@ const legacyDeletionCauseSourceMissing = "source_missing"
 // it into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
+const sessionReplyCols = `COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), CAST(ordinal AS TEXT)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id,
+	CASE WHEN agent = 'claude' THEN COALESCE(turn_open, 1) ELSE 0 END`
+
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
@@ -77,8 +80,7 @@ const sessionBaseCols = `id, project, machine, agent,
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
 	) AS project_assigned,
-	COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), CAST(ordinal AS TEXT)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id,
-	COALESCE(turn_open, 0)`
+	` + sessionReplyCols
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -150,8 +152,7 @@ const sessionFullCols = `id, project, machine, agent,
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
 	) AS project_assigned,
-	COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), CAST(ordinal AS TEXT)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id,
-	COALESCE(turn_open, 0)`
+	` + sessionReplyCols
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -2834,7 +2835,6 @@ type IncrementalInfo struct {
 	AgentLabel           string
 	Entrypoint           string
 	SessionKind          string
-	TerminationStatus    string
 	FileSize             int64
 	FileMtime            int64
 	NextOrdinal          int
@@ -2957,7 +2957,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 	var linearParse sql.NullBool
 	err = db.getReader().QueryRow(ctx,
 		`SELECT s.id, s.project, COALESCE(snap.project, ''),
-			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind, COALESCE(s.termination_status, ''),
+			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind,
 			file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device,
@@ -2988,7 +2988,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 	).Scan(
 		&info.ID, &info.Project, &info.SourceProject,
 		&info.Machine, &info.Cwd,
-		&info.AgentLabel, &info.Entrypoint, &info.SessionKind, &info.TerminationStatus,
+		&info.AgentLabel, &info.Entrypoint, &info.SessionKind,
 		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse,
 		&fi, &fd,
 		&info.MsgCount, &info.UserMsgCount,

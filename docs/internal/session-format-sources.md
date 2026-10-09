@@ -176,13 +176,21 @@ fixtures retain this field; missing identities remain source-local.
   identities and usage, then checks actual parsed counts. These synthetic
   records are a measured subset, not an authoritative or exhaustive schema.
 
-- **Turn completion, reverified 2026-10-09:** Installed interactive CLI 2.1.259+
-  bundles write `system/turn_duration` after successful Stop hooks. SQLite's
-  `turn_open` closes `end_turn` replies when pending agent and workflow counts
-  are absent or integer zero, bounded by the next answered entry. Deferred
-  durations leave streaming replies open; `Classify` owns the stored status.
-  CLI 2.1.294 preserves message UUIDs. Public producer source is unavailable.
-  Rechecked the bundle evidence with full parses, pre-append state and sync.
+- **Turn completion, reverified 2026-10-09:** Interactive CLI 2.1.259+ writes
+  `system/turn_duration` after Stop hooks. In the installed 2.1.296 bundle,
+  `qkt` builds both the turn's duration and `_flushDeferredSwarmDuration`'s
+  duration; neither includes an owner ID. The deferred writer checks swarm
+  timing and running tasks, rather than the active turn. Stop hooks run before
+  the turn's own duration, and zero pending counts become absent fields.
+  SQLite's `turn_open` closes `end_turn` replies with zero or absent pending
+  counts only after a clean `stop_hook_summary` or a preceding duration since
+  the previous turn's last reply. The first turn has no deferred predecessor.
+  Streaming replies stay open. A swarm deferred across two hookless turns can
+  leave both open. `Classify` owns status; incremental reads classify complete
+  records from the last assistant run, extending to the previous reply when
+  duration attribution needs it. Rechecked both writers and the hook builder
+  in the installed bundle, plus deferred-swarm and split-boundary fixtures.
+  Public producer source is unavailable.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
