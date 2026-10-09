@@ -35,17 +35,16 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
-function turnKey(row: DbSession): string {
-  return `${row.user_message_count}:${row.total_output_tokens}`;
+function finished(row: DbSession): boolean {
+  return row.termination_status === "awaiting_user" && !row.turn_open && !!row.last_reply_id;
 }
 
 const FRESHNESS_MS = 10 * 60_000;
 const SAFETY_NET_REFRESH_MS = 5 * 60_000;
 
 export function startNotificationWatcher(viewingId: () => string | null): () => void {
-  const seen = new Map<string, { waitingKey?: string }>();
-  const startedAt = Date.now();
-  let coveredSince = startedAt;
+  const seen = new Map<string, { replyId?: string }>();
+  let coveredSince = Date.now();
   let stopped = false;
   let running = false;
   let pending = false;
@@ -90,28 +89,17 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       if (stopped) return;
       let readsSucceeded = true;
       for (const row of rows) {
-        const waiting = row.termination_status === "awaiting_user";
-        const key = turnKey(row);
-        let previous = seen.get(row.id);
+        const previous = seen.get(row.id);
         if (!previous) {
-          previous = {};
-          seen.set(row.id, previous);
-          if (!(Date.parse(row.created_at) >= startedAt)) {
-            previous.waitingKey = waiting ? key : undefined;
-            continue;
-          }
-        }
-        if (!waiting) {
-          previous.waitingKey = undefined;
+          seen.set(row.id, { replyId: finished(row) ? row.last_reply_id : undefined });
           continue;
         }
-        if (previous.waitingKey === key) continue;
+        if (!finished(row) || previous.replyId === row.last_reply_id) continue;
         try {
           const current = await SessionsService.getApiV1SessionsById({ id: row.id });
           if (stopped) return;
-          if (current.termination_status === "awaiting_user" && turnKey(current) === key)
-            send(current);
-          previous.waitingKey = key;
+          if (finished(current) && current.last_reply_id === row.last_reply_id) send(current);
+          previous.replyId = row.last_reply_id;
         } catch (err) {
           readsSucceeded = false;
           console.warn("notification turn-end read failed", err);

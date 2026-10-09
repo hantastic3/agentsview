@@ -513,10 +513,12 @@ func claudeParseFile(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		results[i].Session.TerminationStatus = classifyClaudeTermination(
-			results[i].Messages, entries, durations, answered,
+		results[i].Session.TerminationStatus = Classify(
+			results[i].Messages,
+			lastAssistantStopReason(results[i].Messages),
 			lastLineFailed,
 		)
+		results[i].Session.TurnOpen = new(claudeTurnOpen(results[i].Messages, entries, durations, answered))
 		results[i].Session.claudeRenameSeen = renameSeen
 	}
 
@@ -776,7 +778,7 @@ func claudePendingCount(count gjson.Result) int64 {
 		return 0
 	}
 	value, err := strconv.ParseInt(count.Raw, 10, 64)
-	if count.Type != gjson.Number || err != nil || value < 0 {
+	if err != nil || value < 0 {
 		return -1
 	}
 	return value
@@ -794,24 +796,24 @@ func claudeAnsweredUUIDs(results []ParseResult) map[string]bool {
 	return answered
 }
 
-func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, answered map[string]bool, truncated bool) TerminationStatus {
-	status := Classify(messages, lastAssistantStopReason(messages), truncated)
-	if status != TerminationAwaitingUser {
-		return status
-	}
+func claudeTurnOpen(messages []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, answered map[string]bool) bool {
 	for _, msg := range slices.Backward(messages) {
-		if msg.IsSystem {
+		if msg.IsSystem || msg.Role != RoleAssistant {
 			continue
 		}
 		if msg.SourceUUID == "" {
-			return status
+			return false
 		}
 		for i, entry := range entries {
 			if entry.uuid != msg.SourceUUID {
 				continue
 			}
 			if !claudeWritesTurnDuration(entry.line) {
-				return status
+				return false
+			}
+			// Deferred durations belong to the prior turn while this reply is streaming.
+			if msg.StopReason != "end_turn" {
+				return true
 			}
 			end := -1
 			for _, later := range entries[i+1:] {
@@ -822,17 +824,14 @@ func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, dur
 			}
 			for _, duration := range slices.Backward(durations) {
 				if duration.position > entry.lineIndex && (end < 0 || duration.position <= end) {
-					if duration.pending == 0 && duration.workflows == 0 {
-						return TerminationAwaitingUser
-					}
-					break
+					return duration.pending != 0 || duration.workflows != 0
 				}
 			}
-			return ""
+			return true
 		}
-		return status
+		return false
 	}
-	return status
+	return false
 }
 
 // claudeParseSessionFrom parses only new lines from a Claude JSONL
@@ -877,12 +876,12 @@ type claudeStoredIdentity struct {
 // claudeIncrementalScan carries the per-session stored state an
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
-	termination            **TerminationStatus
-	storedStatus           TerminationStatus
-	storedUserMessageCount int
-	startOrdinal           int
-	lastEntryUUID          string
-	stored                 claudeStoredIdentity
+	termination   **TerminationStatus
+	storedStatus  TerminationStatus
+	turnOpen      **bool
+	startOrdinal  int
+	lastEntryUUID string
+	stored        claudeStoredIdentity
 	// storedLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing (multi-root or unresolvable-parent DAG).
@@ -933,97 +932,102 @@ func claudeParseSessionFrom(
 		appendedCustomTitle    string
 	)
 
-	consumed, truncated, err := readJSONLFrom(path, offset, func(line string) {
-		line = resolveClaudePersistedToolResults(path, line)
-		if ts := extractTimestamp(line); !ts.IsZero() {
-			if ts.After(latestTS) {
-				latestTS = ts
-			}
-		}
-		entryType := gjson.Get(line, "type").Str
-		if claudeSessionIdentityUpdate(line, stored) {
-			sawSessionIdentityEdit = true
-		}
-		if entryType == "ai-title" &&
-			strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
-			sawAITitle = true
-		}
-		if entryType == "custom-title" {
-			if value := strings.TrimSpace(
-				gjson.Get(line, "customTitle").Str,
-			); value != "" {
-				appendedCustomTitle = value
-			}
-			return
-		}
-		if entryType == "system" {
-			if claudeWritesTurnDuration(line) {
-				durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
-			}
-			if _, ok := extractRenameName(
-				gjson.Get(line, "content").Str,
-			); ok {
-				sawRename = true
-			}
-			return
-		}
-		if entryType == "agent-setting" {
-			return
-		}
-		if entryType == "attachment" {
-			if qc, ok := extractQueuedCommand(line); ok {
-				queuedCommands = append(queuedCommands, qc)
-			}
-			return
-		}
-		if entryType == "queue-operation" {
-			if gjson.Get(line, "operation").Str == "enqueue" {
-				contentStr := gjson.Get(line, "content").Str
-				if contentStr != "" {
-					tuid := gjson.Get(contentStr, "tool_use_id").Str
-					taskID := gjson.Get(contentStr, "task_id").Str
-					if tuid == "" || taskID == "" {
-						if m := xmlTaskIDRe.FindStringSubmatch(contentStr); m != nil {
-							taskID = m[1]
-						}
-						if m := xmlToolUseRe.FindStringSubmatch(contentStr); m != nil {
-							tuid = m[1]
-						}
-					}
-					if tuid != "" && taskID != "" {
-						subagentMap[tuid] = "agent-" + taskID
-					}
+	consumed, truncated, err := readJSONLFrom(
+		path, offset, func(line string) {
+			line = resolveClaudePersistedToolResults(path, line)
+			if ts := extractTimestamp(line); !ts.IsZero() {
+				if ts.After(latestTS) {
+					latestTS = ts
 				}
 			}
-			return
-		}
-		if entryType == "progress" {
-			if gjson.Get(line, "data.type").Str == "agent_progress" {
-				tuid := gjson.Get(line, "parentToolUseID").Str
-				agentID := gjson.Get(line, "data.agentId").Str
-				if tuid != "" && agentID != "" {
-					subagentMap[tuid] = "agent-" + agentID
-				}
+			entryType := gjson.Get(line, "type").Str
+			if claudeSessionIdentityUpdate(line, stored) {
+				sawSessionIdentityEdit = true
 			}
-			return
-		}
-		if entryType != "user" &&
-			entryType != "assistant" {
-			return
-		}
-		ts := extractTimestamp(line)
-		entries = append(entries, dagEntry{
-			uuid:       gjson.Get(line, "uuid").Str,
-			parentUuid: gjson.Get(line, "parentUuid").Str,
-			entryType:  entryType,
-			lineIndex:  lineIndex,
-			line:       line,
-			timestamp:  ts,
-		})
-		lineIndex++
-	})
+			if entryType == "ai-title" &&
+				strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
+				sawAITitle = true
+			}
+			if entryType == "custom-title" {
+				if value := strings.TrimSpace(
+					gjson.Get(line, "customTitle").Str,
+				); value != "" {
+					appendedCustomTitle = value
+				}
+				return
+			}
+			if entryType == "system" {
+				if claudeWritesTurnDuration(line) {
+					durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
+				}
+				if _, ok := extractRenameName(
+					gjson.Get(line, "content").Str,
+				); ok {
+					sawRename = true
+				}
+				return
+			}
+			if entryType == "agent-setting" {
+				return
+			}
+			if entryType == "attachment" {
+				if qc, ok := extractQueuedCommand(line); ok {
+					queuedCommands = append(queuedCommands, qc)
+				}
+				return
+			}
+			if entryType == "queue-operation" {
+				if gjson.Get(line, "operation").Str == "enqueue" {
+					contentStr := gjson.Get(line, "content").Str
+					if contentStr != "" {
+						tuid := gjson.Get(contentStr, "tool_use_id").Str
+						taskID := gjson.Get(contentStr, "task_id").Str
+						if tuid == "" || taskID == "" {
+							if m := xmlTaskIDRe.FindStringSubmatch(contentStr); m != nil {
+								taskID = m[1]
+							}
+							if m := xmlToolUseRe.FindStringSubmatch(contentStr); m != nil {
+								tuid = m[1]
+							}
+						}
+						if tuid != "" && taskID != "" {
+							subagentMap[tuid] = "agent-" + taskID
+						}
+					}
+				}
+				return
+			}
+			if entryType == "progress" {
+				if gjson.Get(line, "data.type").Str == "agent_progress" {
+					tuid := gjson.Get(line, "parentToolUseID").Str
+					agentID := gjson.Get(line, "data.agentId").Str
+					if tuid != "" && agentID != "" {
+						subagentMap[tuid] = "agent-" + agentID
+					}
+				}
+				return
+			}
+			if entryType != "user" &&
+				entryType != "assistant" {
+				return
+			}
+			ts := extractTimestamp(line)
+			entries = append(entries, dagEntry{
+				uuid:       gjson.Get(line, "uuid").Str,
+				parentUuid: gjson.Get(line, "parentUuid").Str,
+				entryType:  entryType,
+				lineIndex:  lineIndex,
+				line:       line,
+				timestamp:  ts,
+			})
+			lineIndex++
+		},
+	)
 	if err != nil {
-		return nil, nil, time.Time{}, 0, err
+		return nil, nil, time.Time{}, 0, fmt.Errorf(
+			"reading claude %s from offset %d: %w",
+			path, offset, err,
+		)
 	}
 
 	// Merge same-message.id streaming runs exactly as the full parser
@@ -1075,6 +1079,14 @@ func claudeParseSessionFrom(
 	if needsClaudeFullParseForWebSearchCounts(entries) {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
+
+	if len(entries) == 0 && len(queuedCommands) == 0 {
+		if err := scan.setVerdicts(nil, entries, durations, truncated); err != nil {
+			return nil, nil, time.Time{}, 0, err
+		}
+		return nil, links, latestTS, consumed, nil
+	}
+
 	// Fork detection only matters when the full parser would actually
 	// walk the DAG. parseLinear-bound files — multi-root or with
 	// unresolvable parents, which is every real CLI transcript whose
@@ -1144,25 +1156,54 @@ func claudeParseSessionFrom(
 	if latestTS.After(endedAt) {
 		endedAt = latestTS
 	}
-	status := scan.storedStatus
-	if truncated {
-		status = TerminationTruncated
-	} else if slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem || len(msg.ToolResults) > 0 }) {
-		answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
-		status = classifyClaudeTermination(msgs, entries, durations, answered, false)
-	} else if status == TerminationTruncated {
-		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
-	} else if status == "" && scan.storedUserMessageCount > 0 && len(durations) > 0 {
-		last := durations[len(durations)-1]
-		if last.pending == 0 && last.workflows == 0 {
-			status = TerminationAwaitingUser
-		}
-	}
-	if scan.termination != nil {
-		*scan.termination = new(status)
+	if err := scan.setVerdicts(msgs, entries, durations, truncated); err != nil {
+		return nil, nil, time.Time{}, 0, err
 	}
 
 	return msgs, links, endedAt, consumed, nil
+}
+
+func (scan claudeIncrementalScan) setVerdicts(msgs []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, truncated bool) error {
+	hasAssistant := slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem && msg.Role == RoleAssistant })
+	var status *TerminationStatus
+	if truncated {
+		status = new(TerminationTruncated)
+	} else if hasAssistant {
+		status = new(Classify(msgs, lastAssistantStopReason(msgs), false))
+	} else if scan.storedStatus == TerminationTruncated {
+		return ErrClaudeIncrementalNeedsFullParse
+	} else if scan.storedStatus == TerminationAwaitingUser || scan.storedStatus == TerminationClean {
+		status = new(scan.storedStatus)
+		if slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem }) {
+			status = new(TerminationClean)
+		}
+	}
+	if scan.termination != nil {
+		*scan.termination = status
+	}
+	if scan.turnOpen != nil {
+		if hasAssistant {
+			answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
+			*scan.turnOpen = new(claudeTurnOpen(msgs, entries, durations, answered))
+		} else if len(durations) > 0 && scan.storedStatus == TerminationAwaitingUser {
+			answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
+			end := -1
+			for _, entry := range entries {
+				if answered[entry.uuid] {
+					end = entry.lineIndex
+					break
+				}
+			}
+			for _, duration := range slices.Backward(durations) {
+				if end < 0 || duration.position <= end {
+					*scan.turnOpen = new(duration.pending != 0 || duration.workflows != 0)
+					break
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // claudeSessionIdentityUpdate reports whether an appended line carries an

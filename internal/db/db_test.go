@@ -1121,11 +1121,6 @@ func TestCurrentDataVersionClaudePeerMessages(t *testing.T) {
 		"version 126 is the data-version boundary for Claude peer-message classification")
 }
 
-func TestCurrentDataVersionClaudeTurnDuration(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 128,
-		"version 128 is the data-version boundary for Claude turn-duration classification")
-}
-
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
@@ -8474,15 +8469,19 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 		terminationStatus *string
 		wantStatus        string
 		wantNull          bool
+		turnOpen          *bool
+		wantOpen          bool
 	}{
 		{
 			name:              "stores authoritative status",
 			terminationStatus: new("awaiting_user"),
 			wantStatus:        "awaiting_user",
+			turnOpen:          new(false),
 		},
 		{
 			name:     "nil clears status",
 			wantNull: true,
+			wantOpen: true,
 		},
 	}
 
@@ -8493,10 +8492,12 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 				ID:                "incremental-status",
 				Agent:             "claude",
 				TerminationStatus: new("tool_call_pending"),
+				TurnOpen:          true,
 			}), "seed session")
 
 			update := IncrementalSessionUpdate{
 				TerminationStatus: tt.terminationStatus,
+				TurnOpen:          tt.turnOpen,
 			}
 			require.NoError(t, d.UpdateSessionIncremental(t.Context(),
 				"incremental-status", update,
@@ -8505,6 +8506,7 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			got, err := d.GetSessionFull(t.Context(), "incremental-status")
 			require.NoError(t, err, "read updated session")
 			require.NotNil(t, got, "updated session")
+			assert.Equal(t, tt.wantOpen, got.TurnOpen)
 			if tt.wantNull {
 				assert.Nil(t, got.TerminationStatus, "termination_status")
 				return
@@ -9820,4 +9822,32 @@ func TestBackfillToolCallFieldsRunsOnce(t *testing.T) {
 	assert.Equal(t, "/first.go", fp["first"].String, "first row backfilled")
 	assert.False(t, fp["second"].Valid,
 		"second row left NULL: one-time gate skipped the rerun")
+}
+
+func TestMigration_TurnOpenColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d := testDBAtPath(t, path, "initial migration db")
+	insertSession(t, d, "s1", "proj")
+	require.NoError(t, d.Close())
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN turn_open`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `PRAGMA user_version = 127`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	reopened, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	var open *bool
+	require.NoError(t, reopened.Reader().QueryRowContext(t.Context(), `SELECT turn_open FROM sessions WHERE id = 's1'`).Scan(&open))
+	assert.Nil(t, open)
+	session, err := reopened.GetSession(t.Context(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.False(t, session.TurnOpen)
+	assert.Empty(t, session.LastReplyID)
+	var version int
+	require.NoError(t, reopened.Reader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+	assert.Equal(t, 127, version)
 }

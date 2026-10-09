@@ -202,7 +202,19 @@ func TestSessionFilterEachRowActiveSince(t *testing.T) {
 			s.RelationshipType = relationship
 			s.EndedAt = new("2024-06-03T10:00:00Z")
 			s.MessageCount = 5
+			s.Agent = "claude"
+			s.TurnOpen = relationship == "subagent"
 		})
+		uuid := "reply-" + relationship
+		if relationship == "continuation" {
+			uuid = ""
+		}
+		insertMessages(t, d,
+			Message{SessionID: relationship, Ordinal: 1, Role: "assistant", Content: "earlier", SourceUUID: "old"},
+			Message{SessionID: relationship, Ordinal: 4, Role: "assistant", Content: "done", SourceUUID: uuid},
+			Message{SessionID: relationship, Ordinal: 5, Role: "assistant", Content: "summary", IsSystem: true, SourceUUID: "system"},
+			userMsg(relationship, 6, "continue"),
+		)
 	}
 	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
 	filter := SessionFilter{EachRow: true, ActiveSince: "2024-06-03T00:00:00Z"}
@@ -214,7 +226,19 @@ func TestSessionFilterEachRowActiveSince(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, page.Sessions, 1)
 		assert.Equal(t, 3, page.Total)
-		ids = append(ids, page.Sessions[0].ID)
+		row := page.Sessions[0]
+		wantID := "reply-" + row.ID
+		if row.ID == "continuation" {
+			wantID = "4"
+		}
+		assert.Equal(t, wantID, row.LastReplyID)
+		assert.Equal(t, row.ID == "subagent", row.TurnOpen)
+		byID, err := d.GetSession(t.Context(), row.ID)
+		require.NoError(t, err)
+		require.NotNil(t, byID)
+		assert.Equal(t, wantID, byID.LastReplyID)
+		assert.Equal(t, row.TurnOpen, byID.TurnOpen)
+		ids = append(ids, row.ID)
 		filter.Cursor = page.NextCursor
 		if len(ids) < 3 {
 			require.NotEmpty(t, filter.Cursor)

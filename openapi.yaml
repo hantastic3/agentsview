@@ -2510,6 +2510,8 @@ components:
           type: boolean
         is_truncated:
           type: boolean
+        last_reply_id:
+          type: string
         local_modified_at:
           type: string
         machine:
@@ -2574,6 +2576,8 @@ components:
           type: string
         transcript_revision:
           type: string
+        turn_open:
+          type: boolean
         user_message_count:
           format: int64
           type: integer
@@ -6474,6 +6478,8 @@ components:
           type: boolean
         is_truncated:
           type: boolean
+        last_reply_id:
+          type: string
         local_modified_at:
           type: string
         machine:
@@ -6538,6 +6544,8 @@ components:
           type: string
         transcript_revision:
           type: string
+        turn_open:
+          type: boolean
         user_message_count:
           format: int64
           type: integer

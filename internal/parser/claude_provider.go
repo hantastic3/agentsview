@@ -366,15 +366,16 @@ func (p *claudeProvider) ParseIncremental(
 			IncrementalNeedsFullParse, nil
 	}
 	var termination *TerminationStatus
+	var turnOpen *bool
 	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
 		path,
 		req.Offset,
 		claudeIncrementalScan{
-			termination:            &termination,
-			storedStatus:           TerminationStatus(req.StoredTerminationStatus),
-			storedUserMessageCount: req.StoredUserMessageCount,
-			startOrdinal:           req.StartOrdinal,
-			lastEntryUUID:          req.LastEntryUUID,
+			termination:   &termination,
+			storedStatus:  TerminationStatus(req.StoredTerminationStatus),
+			turnOpen:      &turnOpen,
+			startOrdinal:  req.StartOrdinal,
+			lastEntryUUID: req.LastEntryUUID,
 			stored: claudeStoredIdentity{
 				agentLabel:  req.StoredAgentLabel,
 				entrypoint:  req.StoredEntrypoint,
@@ -398,9 +399,10 @@ func (p *claudeProvider) ParseIncremental(
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
 	if len(newMsgs) == 0 {
-		if consumed > 0 || termination != nil && *termination == TerminationTruncated {
+		if consumed > 0 {
 			return IncrementalOutcome{
 				TerminationStatus: termination,
+				TurnOpen:          turnOpen,
 				SessionID:         req.SessionID,
 				SubagentLinks:     links,
 				EndedAt:           endedAt,
@@ -415,6 +417,7 @@ func (p *claudeProvider) ParseIncremental(
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx := claudeProviderTokenTotals(newMsgs)
 	return IncrementalOutcome{
 		TerminationStatus:    termination,
+		TurnOpen:             turnOpen,
 		SessionID:            req.SessionID,
 		Messages:             newMsgs,
 		SubagentLinks:        links,

@@ -1044,15 +1044,16 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 		name, tail string
 		stored     string
 		userCount  int
+		noData     bool
 		fullParse  bool
 		want       *TerminationStatus
 	}{
 		{name: "metadata preserves waiting", tail: `{"type":"queue-operation","operation":"dequeue"}` + "\n", stored: "awaiting_user", want: new(TerminationAwaitingUser)},
-		{name: "truncated message-free tail", tail: `{"type":"user"`, stored: "awaiting_user", want: new(TerminationTruncated)},
+		{name: "truncated message-free tail", tail: `{"type":"user"`, stored: "awaiting_user", noData: true},
 		{name: "stored truncation needs context", tail: `{"type":"queue-operation","operation":"dequeue"}` + "\n", stored: "truncated", fullParse: true},
-		{name: "duration without user", tail: `{"type":"system","subtype":"turn_duration","entrypoint":"cli","version":"2.1.295"}` + "\n", want: new(TerminationStatus(""))},
-		{name: "unsupported duration", tail: `{"type":"system","subtype":"turn_duration","entrypoint":"sdk-cli","version":"2.1.295"}` + "\n", userCount: 1, want: new(TerminationStatus(""))},
-		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: new(TerminationClean)},
+		{name: "duration without user", tail: `{"type":"system","subtype":"turn_duration","entrypoint":"cli","version":"2.1.295"}` + "\n", want: nil},
+		{name: "unsupported duration", tail: `{"type":"system","subtype":"turn_duration","entrypoint":"sdk-cli","version":"2.1.295"}` + "\n", userCount: 1, want: nil},
+		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", stored: "awaiting_user", want: new(TerminationClean)},
 		{name: "incomplete tail", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"`, want: new(TerminationTruncated)},
 		{name: "completed turn", tail: completedTurn, want: new(TerminationAwaitingUser)},
 		{name: "completion before incomplete tail", tail: completedTurn + `{"type":"user"`, want: new(TerminationTruncated)},
@@ -1079,9 +1080,14 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 				assert.True(t, outcome.ForceReplace)
 				return
 			}
+			if tc.noData {
+				require.Equal(t, IncrementalNoNewData, status)
+				assert.Zero(t, outcome.ConsumedBytes)
+				return
+			}
 			require.Equal(t, IncrementalApplied, status)
 			assert.Equal(t, tc.want, outcome.TerminationStatus)
-			if *tc.want == TerminationTruncated {
+			if tc.want != nil && *tc.want == TerminationTruncated {
 				full, _, err := claudeParseFile(path, "demo", "test", claudeParseOptions{})
 				require.NoError(t, err)
 				require.Len(t, full, 1)

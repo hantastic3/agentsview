@@ -176,21 +176,13 @@ fixtures retain this field; missing identities remain source-local.
   identities and usage, then checks actual parsed counts. These synthetic
   records are a measured subset, not an authoritative or exhaustive schema.
 
-- **Turn completion evidence, reverified 2026-10-09:** Interactive CLI
-  2.1.259 and newer writes `system/turn_duration` after successful Stop hooks.
-  The 2.1.293 producer omits zero `pendingBackgroundAgentCount` and
-  `pendingWorkflowCount`. Only absent or integer zero counts finish a turn.
-  The 2.1.294 bundle uses `crypto.randomUUID` for user and assistant records;
-  `insertMessageChain` preserves them, chaining through system and attachment
-  records. Public producer source is unavailable; evidence comes from the
-  installed bundles and transcripts.
-  A duration only confirms an `end_turn` reply; streaming replies and tool calls
-  keep their base verdicts. Full and incremental parsing use line order, bounded
-  by the next branch's visible message. Message-free tails carry the stored
-  verdict; a zero-count duration settles a stored unfinished reply without a
-  full parse. Truncation takes precedence. Older, headless, sidechain and
-  unversioned records retain `end_turn`. Reverified with UUID-chained fixtures,
-  filtered metadata, every append boundary, streaming replies and incremental sync.
+- **Turn completion, reverified 2026-10-09:** Installed interactive CLI 2.1.259+
+  bundles write `system/turn_duration` after successful Stop hooks. SQLite's
+  `turn_open` closes `end_turn` replies when pending agent and workflow counts
+  are absent or integer zero, bounded by the next answered entry. Deferred
+  durations leave streaming replies open; `Classify` owns the stored status.
+  CLI 2.1.294 preserves message UUIDs. Public producer source is unavailable.
+  Rechecked the bundle evidence with full parses, pre-append state and sync.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.

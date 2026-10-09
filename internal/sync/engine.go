@@ -11176,6 +11176,7 @@ type incrementalUpdate struct {
 	checkpointBlobs      *db.ParserCheckpointBlobs
 	endedAt              time.Time
 	terminationStatus    *string
+	turnOpen             *bool
 	msgCount             int // total (old + new)
 	userMsgCount         int // total (old + new)
 	fileSize             int64
@@ -15835,7 +15836,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 
 	parseFn := func(
 		_ string, inc *db.IncrementalInfo,
-	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
+	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, *bool, []byte, error) {
 		// The Claude parser needs the stored tail's provider message id
 		// so its queued-command masking fallback fires only for a real
 		// same-message.id continuation; without it, every routine queued
@@ -15848,7 +15849,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 			if !e.db.ArchiveContent().UsageOnly() {
 				name, found, nerr := e.db.GetSessionName(ctx, inc.ID)
 				if nerr != nil {
-					return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil,
 						fmt.Errorf("read stored Claude session name: %w", nerr)
 				}
 				if found {
@@ -15879,14 +15880,14 @@ func (e *Engine) tryProviderIncrementalAppend(
 			},
 		)
 		if perr != nil {
-			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, perr
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil, perr
 		}
 		switch status {
 		case parser.IncrementalNeedsFullParse:
 			if outcome.ForceReplace {
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
-				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil,
 					parser.ErrIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback without a replace request.
@@ -15894,9 +15895,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 			// fallbacks (a DAG fork can drop or re-branch stored
 			// rows), so this branch serves providers that only need
 			// an append-preserving full parse.
-			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, parser.ErrDAGDetected
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil, parser.ErrDAGDetected
 		case parser.IncrementalNoNewData:
-			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil, nil
 		default:
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil && *outcome.TerminationStatus != "" {
@@ -15906,7 +15907,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 			return outcome.Messages, outcome.SubagentLinks,
 				outcome.ToolCallUpdates,
 				outcome.MessageTokenUsageUpdates,
-				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus,
+				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus, outcome.TurnOpen,
 				outcome.NextCursor, nil
 		}
 	}
@@ -15925,7 +15926,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 // only complete, valid JSON lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
 	path string, inc *db.IncrementalInfo,
-) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error)
+) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, *bool, []byte, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -16059,7 +16060,7 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{err: leaseErr}, true
 	}
 
-	newMsgs, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed, terminationStatus, cursor, err := parseFn(
+	newMsgs, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed, terminationStatus, turnOpen, cursor, err := parseFn(
 		file.Path, inc,
 	)
 	if err != nil {
@@ -16243,7 +16244,7 @@ func (e *Engine) tryIncrementalJSONL(
 		// so they aren't re-read on every sync. Carry
 		// endedAt forward so session bounds stay current
 		// with non-message timestamps (e.g. progress).
-		if consumed > 0 || terminationStatus != nil && *terminationStatus != inc.TerminationStatus {
+		if consumed > 0 {
 			return processResult{
 				sourceBytes: sourceBytes,
 				incremental: &incrementalUpdate{
@@ -16260,6 +16261,7 @@ func (e *Engine) tryIncrementalJSONL(
 					checkpointBlobs:      nextCheckpointBlobs,
 					endedAt:              endedAt,
 					terminationStatus:    terminationStatus,
+					turnOpen:             turnOpen,
 					msgCount:             inc.MsgCount,
 					userMsgCount:         inc.UserMsgCount,
 					fileSize:             newOffset,
@@ -16395,6 +16397,7 @@ func (e *Engine) tryIncrementalJSONL(
 			checkpointBlobs:      nextCheckpointBlobs,
 			endedAt:              endedAt,
 			terminationStatus:    terminationStatus,
+			turnOpen:             turnOpen,
 			msgCount:             inc.MsgCount + len(newMsgs),
 			userMsgCount:         inc.UserMsgCount + newUserCount,
 			fileSize:             newOffset,
@@ -16442,7 +16445,7 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	scanInc.FileSize = runStart
 	scanInc.NextOrdinal = runOrdinal
 	suffix, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed,
-		terminationStatus, _, err := parseFn(file.Path, &scanInc)
+		terminationStatus, turnOpen, _, err := parseFn(file.Path, &scanInc)
 	if err != nil {
 		// Re-parsing from the run's start can be declined by the same
 		// fallbacks the window parse has: a queued command sorting ahead
@@ -16482,6 +16485,7 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 		links:              links,
 		endedAt:            endedAt,
 		terminationStatus:  terminationStatus,
+		turnOpen:           turnOpen,
 		fileSize:           newOffset,
 		fileMtime:          incMtime,
 		fileHash:           incHash,
@@ -19467,6 +19471,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		db.IncrementalSessionUpdate{
 			EndedAt:                  endedAt,
 			TerminationStatus:        inc.terminationStatus,
+			TurnOpen:                 inc.turnOpen,
 			MsgCount:                 msgCount,
 			UserMsgCount:             userMsgCount,
 			FileSize:                 inc.fileSize,

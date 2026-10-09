@@ -19976,6 +19976,7 @@ type DBSession struct {
 	ID                     string            `json:"id" validate:"required"`
 	IsAutomated            bool              `json:"is_automated"`
 	IsTruncated            *bool             `json:"is_truncated,omitempty"`
+	LastReplyID            *string           `json:"last_reply_id,omitempty"`
 	LocalModifiedAt        *string           `json:"local_modified_at,omitempty"`
 	Machine                string            `json:"machine" validate:"required"`
 	MessageCount           int64             `json:"message_count"`
@@ -20002,6 +20003,7 @@ type DBSession struct {
 	TotalOutputTokens      int64             `json:"total_output_tokens"`
 	TranscriptFidelity     *string           `json:"transcript_fidelity,omitempty"`
 	TranscriptRevision     *string           `json:"transcript_revision,omitempty"`
+	TurnOpen               *bool             `json:"turn_open,omitempty"`
 	UserMessageCount       int64             `json:"user_message_count"`
 	WebURL                 *string           `json:"web_url,omitempty"`
 }

@@ -57,6 +57,7 @@ beforeEach(() => {
     message_count: 2,
     user_message_count: 1,
     total_output_tokens: 100,
+    last_reply_id: "reply-1",
   } as DbSession;
   list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
   session.mockImplementation(
@@ -78,6 +79,13 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).not.toHaveBeenCalled();
     expect(session).not.toHaveBeenCalled();
   });
+  it.each([undefined, ""])("stays silent without a reply ID: %s", async (last_reply_id) => {
+    row.last_reply_id = last_reply_id;
+    await start();
+    await change({ termination_status: "awaiting_user" });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(session).not.toHaveBeenCalled();
+  });
   it("notifies once on completion", async () => {
     await start();
     await change({ termination_status: "awaiting_user" });
@@ -89,42 +97,36 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([{ user_message_count: 2 }, { total_output_tokens: 200 }])(
-    "notifies on a new waiting turn: %j",
-    async (patch) => {
-      row.termination_status = "awaiting_user";
-      await start();
-      await change(patch);
-      await change();
-      expect(plugin.sendNotification).toHaveBeenCalledOnce();
-    },
-  );
-  it("notifies after a rewind and resend repeats the completed turn's counts", async () => {
+  it("notifies after a rewind with equal counts and a new reply", async () => {
+    row.termination_status = "awaiting_user";
+    await start();
+    await change({ last_reply_id: "reply-2" });
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("keeps a truncated flicker silent for the same reply", async () => {
     await start();
     await change({ termination_status: "awaiting_user" });
-    await change({ termination_status: "clean", user_message_count: 0, total_output_tokens: 0 });
-    await change({
-      termination_status: "awaiting_user",
-      user_message_count: 1,
-      total_output_tokens: 100,
-      ended_at: "2026-10-07T12:01:00Z",
-    });
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
+    await change({ termination_status: "truncated" });
+    await change({ termination_status: "awaiting_user" });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([
-    { created_at: "2026-10-07T11:59:59Z", sent: false },
-    { created_at: "2026-10-07T12:00:00Z", sent: true },
-    { created_at: "2026-10-07T12:01:00Z", sent: true },
-    { started_at: "2026-10-07T12:01:00Z", created_at: "2026-10-07T11:00:00Z", sent: false },
-    { started_at: "2026-10-07T11:00:00Z", created_at: "2026-10-07T12:01:00Z", sent: true },
-  ])("handles a first-seen waiting session: %j", async ({ sent, ...patch }) => {
+  it("records a finished import after enabling silently", async () => {
     list.mockResolvedValueOnce({ sessions: [], total: 0 });
     await start();
-    vi.setSystemTime(new Date("2026-10-07T12:02:00Z"));
-    await change({ ...patch, termination_status: "awaiting_user" });
+    await change({ created_at: "2026-10-07T12:01:00Z", termination_status: "awaiting_user" });
     await change();
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(sent ? 1 : 0);
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+  it("notifies only after pending work closes", async () => {
+    row.termination_status = "awaiting_user";
+    row.turn_open = true;
+    await start();
+    await change();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    await change({ turn_open: false });
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("keeps a renamed completion silent when ended_at changes", async () => {
     row.termination_status = "awaiting_user";
@@ -132,14 +134,6 @@ describe("desktop notification watcher", () => {
     await change({ message_count: 3, display_name: "Renamed", ended_at: "2026-10-07T12:01:00Z" });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
     expect(session).not.toHaveBeenCalled();
-  });
-  it("notifies after a non-waiting refresh between equal keys", async () => {
-    row.termination_status = "awaiting_user";
-    await start();
-    await change({ termination_status: "clean" });
-    await change({ termination_status: "awaiting_user" });
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it.each([{ relationship_type: "subagent" }, {}])(
     "remembers silent completions: %j",
@@ -164,7 +158,7 @@ describe("desktop notification watcher", () => {
     await change({ termination_status: "awaiting_user" });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([{ total_output_tokens: 200 }, { termination_status: "clean" }])(
+  it.each([{ last_reply_id: "reply-2" }, { termination_status: "clean" }, { turn_open: true }])(
     "records a changed re-read silently: %j",
     async (patch) => {
       await start();
@@ -262,7 +256,7 @@ describe("desktop notification watcher", () => {
     list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
     await change({ message_count: 3 });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change({ total_output_tokens: 200 });
+    await change({ last_reply_id: "reply-2" });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("notifies on the next turn after 24 idle hours", async () => {
@@ -272,7 +266,7 @@ describe("desktop notification watcher", () => {
     vi.setSystemTime(new Date("2026-10-08T12:01:00Z"));
     await change();
     list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
-    await change({ total_output_tokens: 200 });
+    await change({ last_reply_id: "reply-2" });
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
