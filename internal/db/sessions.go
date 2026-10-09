@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ErrInvalidCursor is returned when a cursor cannot be decoded or verified.
@@ -1462,7 +1464,7 @@ const upsertSessionSQL = upsertSessionBaseSQL + `,
 
 func sessionIsAutomated(s Session) bool {
 	return s.IsAutomated ||
-		IsAutomatedSessionMetadata(s.Agent, s.SessionKind) ||
+		IsAutomatedSessionMetadata(s.SessionKind) ||
 		(s.UserMessageCount <= 1 &&
 			s.FirstMessage != nil &&
 			IsAutomatedSession(*s.FirstMessage))
@@ -1476,6 +1478,7 @@ func parserParentSessionID(s Session) *string {
 }
 
 func upsertSessionArgs(s Session) []any {
+	s.RelationshipType = SessionRelationship(s)
 	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
 		s.AgentLabel, s.Entrypoint, s.SessionKind,
@@ -1499,6 +1502,15 @@ func upsertSessionArgs(s Session) []any {
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
 	}
+}
+
+// SessionRelationship normalizes older parentless workers at every session write.
+func SessionRelationship(s Session) string {
+	var parent string
+	if s.ParentSessionID != nil {
+		parent = *s.ParentSessionID
+	}
+	return string(parser.PromoteParentlessWorker(parent, parser.RelationshipType(s.RelationshipType), s.SessionKind == parser.SessionKindNonInteractive))
 }
 
 // UpsertSession inserts or updates a session.
