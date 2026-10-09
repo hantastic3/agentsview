@@ -420,9 +420,31 @@ describe("desktop notification watcher", () => {
       messages.mockResolvedValue({ messages: [assistantMessage(patch)], count: 1 });
       await change({ message_count: 3 });
       expect(plugin.sendNotification).not.toHaveBeenCalled();
-      expect(session).not.toHaveBeenCalled();
+      expect(session).toHaveBeenCalledWith({ id: "session" });
     },
   );
+  it("retries a reply hidden by a system row committed after the session list", async () => {
+    row.termination_status = "awaiting_user";
+    const stored = [assistantMessage({ ordinal: 1 })];
+    messages.mockImplementation(async (_, params) => {
+      const page = stored.slice().reverse().slice(0, params!.limit!);
+      return { messages: page, count: page.length };
+    });
+    await start();
+    stored.push(assistantMessage({ ordinal: 2 }));
+    messages.mockImplementationOnce(async (_, params) => {
+      expect(params).toEqual({ direction: "desc", limit: 1 });
+      stored.push(assistantMessage({ ordinal: 3, role: "system", is_system: true }));
+      row = { ...row, message_count: 4 };
+      return { messages: [stored[2]!], count: 1 };
+    });
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
   it.each([{ termination_status: "" }, { user_message_count: 2 }, { message_count: 4 }])(
     "retries a changed session after the message read: %j",
     async (patch) => {

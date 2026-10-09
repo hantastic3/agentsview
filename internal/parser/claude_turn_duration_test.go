@@ -25,6 +25,9 @@ func TestClaudeTurnDuration(t *testing.T) {
 	const tsEarlyS2 = "2024-01-01T10:00:02Z"
 	const duration = `{"type":"system","subtype":"turn_duration","durationMs":1000}` + "\n"
 	const pending = `{"type":"system","subtype":"turn_duration","durationMs":1000,"pendingBackgroundAgentCount":2}` + "\n"
+	const taskInitial = `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n"
+	const taskNotification = `{"type":"user","uuid":"n0","parentUuid":"a0","message":{"content":"<task-notification>agent finished</task-notification>"}}` + "\n"
+	const taskDuration = `{"type":"system","subtype":"turn_duration","parentUuid":"n0"}` + "\n"
 	answer := testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n"
 	initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly), testjsonl.ClaudeAssistantJSON("ready", tsEarlyS1, "end_turn")) + duration + testjsonl.ClaudeUserJSON("continue", tsEarlyS2) + "\n"
 	for _, tc := range []struct {
@@ -46,9 +49,18 @@ func TestClaudeTurnDuration(t *testing.T) {
 		},
 		{
 			name: "duration parented to stored task notification", fullParseAt: 1,
-			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n" + `{"type":"user","uuid":"n0","parentUuid":"a0","message":{"content":"<task-notification>agent finished</task-notification>"}}` + "\n",
+			initial: taskInitial + taskNotification,
 			tails: []string{
-				`{"type":"system","subtype":"turn_duration","parentUuid":"n0"}` + "\n",
+				taskDuration,
+				`{"type":"assistant","uuid":"a1","parentUuid":"n0","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","parentUuid":"a1"}` + "\n",
+			},
+			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "duration parented to appended task notification", fullParseAt: 1,
+			initial: taskInitial,
+			tails: []string{
+				taskNotification + taskDuration,
 				`{"type":"assistant","uuid":"a1","parentUuid":"n0","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","parentUuid":"a1"}` + "\n",
 			},
 			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},

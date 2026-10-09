@@ -139,7 +139,12 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
               if (from < 0) break;
             }
           }
-          if (turnEnd) {
+          if (
+            turnEnd ||
+            (previous &&
+              row.termination_status === "awaiting_user" &&
+              row.message_count > previous.message_count)
+          ) {
             const current = await SessionsService.getApiV1SessionsById({ id: row.id });
             if (
               current.termination_status !== "awaiting_user" ||
@@ -147,7 +152,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
               current.message_count !== row.message_count
             )
               continue;
-            send(current);
+            if (turnEnd) send(current);
           }
         } catch (err) {
           console.warn("notification turn-end read failed", err);

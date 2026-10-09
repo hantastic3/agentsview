@@ -201,6 +201,9 @@ fixtures retain this field; missing identities remain source-local.
   stored message and fall back for unanswered prompts, including queued-command
   attachments. A duration parented to a stored system-promoted user record
   already falls back when its UUID differs from the substantive stored tail.
+  Reverified 2026-10-09 with `TestClaudeTurnDuration`: a task notification and
+  its duration require full parsing at both append boundaries. Appended
+  system-promoted user records with a duration also trigger this fallback.
   Each branch advances `EndedAt` to its resolved duration timestamp.
 
   Reverified 2026-10-08 against the 2.1.294 bundle, SHA-256

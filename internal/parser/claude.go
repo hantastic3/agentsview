@@ -1213,10 +1213,16 @@ func claudeParseSessionFrom(
 			}
 		}
 	}
-	// System-only or filtered tails need stored evidence to rule out an unanswered prompt.
-	if turnDuration.line != "" && !slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem }) &&
-		claudeStoredTailNeedsFullParse(path, offset, scan.lastEntryUUID) {
-		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	if turnDuration.line != "" {
+		// Promoted user records need the full parser to resolve duration ownership.
+		if slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return msg.IsSystem && msg.Role == RoleUser }) {
+			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		}
+		// System-only or filtered tails need stored evidence to rule out an unanswered prompt.
+		if !slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem }) &&
+			claudeStoredTailNeedsFullParse(path, offset, scan.lastEntryUUID) {
+			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		}
 	}
 	// Use the latest timestamp from all lines (including
 	// non-message events) if it's later than what
