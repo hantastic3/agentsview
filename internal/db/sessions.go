@@ -3057,11 +3057,7 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 // is_automated=0 indefinitely (UpsertSession sets the flag once
 // at insert; the incremental path never re-evaluates it).
 //
-// A non-nil termination_status is an authoritative incremental verdict and
-// is stored as-is. Nil clears the status for parsers such as Claude whose
-// incremental path only sees the new tail and needs the full message slice
-// to classify termination reliably. Clearing prevents a stale prior verdict
-// from remaining visible until the next full sync reclassifies the session.
+// A non-nil termination_status stores the incremental verdict; nil clears a stale verdict when the tail cannot establish termination.
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {

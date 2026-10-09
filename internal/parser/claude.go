@@ -944,101 +944,124 @@ func claudeParseSessionFrom(
 		appendedCustomTitle    string
 	)
 
-	consumed, err := readJSONLFrom(
-		path, offset, func(line string) {
-			line = resolveClaudePersistedToolResults(path, line)
-			if ts := extractTimestamp(line); !ts.IsZero() {
-				if ts.After(latestTS) {
-					latestTS = ts
-				}
+	processLine := func(line string) {
+		line = resolveClaudePersistedToolResults(path, line)
+		if ts := extractTimestamp(line); !ts.IsZero() {
+			if ts.After(latestTS) {
+				latestTS = ts
 			}
-			entryType := gjson.Get(line, "type").Str
-			if claudeSessionIdentityUpdate(line, stored) {
-				sawSessionIdentityEdit = true
+		}
+		entryType := gjson.Get(line, "type").Str
+		if claudeSessionIdentityUpdate(line, stored) {
+			sawSessionIdentityEdit = true
+		}
+		if entryType == "ai-title" &&
+			strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
+			sawAITitle = true
+		}
+		if entryType == "custom-title" {
+			if value := strings.TrimSpace(
+				gjson.Get(line, "customTitle").Str,
+			); value != "" {
+				appendedCustomTitle = value
 			}
-			if entryType == "ai-title" &&
-				strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
-				sawAITitle = true
+			return
+		}
+		if entryType == "system" {
+			durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
+			if _, ok := extractRenameName(
+				gjson.Get(line, "content").Str,
+			); ok {
+				sawRename = true
 			}
-			if entryType == "custom-title" {
-				if value := strings.TrimSpace(
-					gjson.Get(line, "customTitle").Str,
-				); value != "" {
-					appendedCustomTitle = value
-				}
-				return
+			return
+		}
+		if entryType == "agent-setting" {
+			return
+		}
+		if entryType == "attachment" {
+			if qc, ok := extractQueuedCommand(line); ok {
+				queuedCommands = append(queuedCommands, qc)
 			}
-			if entryType == "system" {
-				durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
-				if _, ok := extractRenameName(
-					gjson.Get(line, "content").Str,
-				); ok {
-					sawRename = true
-				}
-				return
-			}
-			if entryType == "agent-setting" {
-				return
-			}
-			if entryType == "attachment" {
-				if qc, ok := extractQueuedCommand(line); ok {
-					queuedCommands = append(queuedCommands, qc)
-				}
-				return
-			}
-			if entryType == "queue-operation" {
-				if gjson.Get(line, "operation").Str == "enqueue" {
-					contentStr := gjson.Get(line, "content").Str
-					if contentStr != "" {
-						tuid := gjson.Get(contentStr, "tool_use_id").Str
-						taskID := gjson.Get(contentStr, "task_id").Str
-						if tuid == "" || taskID == "" {
-							if m := xmlTaskIDRe.FindStringSubmatch(contentStr); m != nil {
-								taskID = m[1]
-							}
-							if m := xmlToolUseRe.FindStringSubmatch(contentStr); m != nil {
-								tuid = m[1]
-							}
+			return
+		}
+		if entryType == "queue-operation" {
+			if gjson.Get(line, "operation").Str == "enqueue" {
+				contentStr := gjson.Get(line, "content").Str
+				if contentStr != "" {
+					tuid := gjson.Get(contentStr, "tool_use_id").Str
+					taskID := gjson.Get(contentStr, "task_id").Str
+					if tuid == "" || taskID == "" {
+						if m := xmlTaskIDRe.FindStringSubmatch(contentStr); m != nil {
+							taskID = m[1]
 						}
-						if tuid != "" && taskID != "" {
-							subagentMap[tuid] = "agent-" + taskID
+						if m := xmlToolUseRe.FindStringSubmatch(contentStr); m != nil {
+							tuid = m[1]
 						}
 					}
-				}
-				return
-			}
-			if entryType == "progress" {
-				if gjson.Get(line, "data.type").Str == "agent_progress" {
-					tuid := gjson.Get(line, "parentToolUseID").Str
-					agentID := gjson.Get(line, "data.agentId").Str
-					if tuid != "" && agentID != "" {
-						subagentMap[tuid] = "agent-" + agentID
+					if tuid != "" && taskID != "" {
+						subagentMap[tuid] = "agent-" + taskID
 					}
 				}
-				return
 			}
-			if entryType != "user" &&
-				entryType != "assistant" {
-				return
+			return
+		}
+		if entryType == "progress" {
+			if gjson.Get(line, "data.type").Str == "agent_progress" {
+				tuid := gjson.Get(line, "parentToolUseID").Str
+				agentID := gjson.Get(line, "data.agentId").Str
+				if tuid != "" && agentID != "" {
+					subagentMap[tuid] = "agent-" + agentID
+				}
 			}
-			ts := extractTimestamp(line)
-			entries = append(entries, dagEntry{
-				uuid:       gjson.Get(line, "uuid").Str,
-				parentUuid: gjson.Get(line, "parentUuid").Str,
-				entryType:  entryType,
-				lineIndex:  lineIndex,
-				line:       line,
-				timestamp:  ts,
-			})
-			lineIndex++
-		},
-	)
+			return
+		}
+		if entryType != "user" &&
+			entryType != "assistant" {
+			return
+		}
+		ts := extractTimestamp(line)
+		entries = append(entries, dagEntry{
+			uuid:       gjson.Get(line, "uuid").Str,
+			parentUuid: gjson.Get(line, "parentUuid").Str,
+			entryType:  entryType,
+			lineIndex:  lineIndex,
+			line:       line,
+			timestamp:  ts,
+		})
+		lineIndex++
+	}
+	f, err := os.Open(path)
 	if err != nil {
+		return nil, nil, time.Time{}, 0, err
+	}
+	defer f.Close()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, nil, time.Time{}, 0, err
+	}
+	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
+	var consumed int64
+	var lastLineHasData, lastLineValid bool
+	for {
+		line, ok := lr.next()
+		if !ok {
+			break
+		}
+		lastLineHasData = strings.TrimSpace(line) != ""
+		lastLineValid = gjson.Valid(line)
+		if lastLineValid {
+			processLine(line)
+			consumed = lr.bytesRead
+		}
+	}
+	if err := lr.Err(); err != nil {
 		return nil, nil, time.Time{}, 0, fmt.Errorf(
 			"reading claude %s from offset %d: %w",
 			path, offset, err,
 		)
 	}
+	isTruncated := lastLineHasData && !lastLineValid && !fileEndsWithNewline(f, offset+lr.bytesRead)
 
 	// Merge same-message.id streaming runs exactly as the full parser
 	// does before any DAG work. Merging swallows chunk uuids, which
@@ -1169,7 +1192,7 @@ func claudeParseSessionFrom(
 			continue
 		}
 		anchored = true
-		if scan.termination != nil {
+		if scan.termination != nil && !isTruncated {
 			answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
 			*scan.termination = new(classifyClaudeTermination(msgs, entries, durations, answered, false))
 		}

@@ -88,20 +88,48 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([{ user_message_count: 2 }, { total_output_tokens: 200 }])(
-    "notifies on a new waiting turn: %j",
-    async (patch) => {
-      row.termination_status = "awaiting_user";
-      await start();
-      await change(patch);
-      await change();
-      expect(plugin.sendNotification).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([
+    { user_message_count: 2 },
+    { total_output_tokens: 200 },
+    { ended_at: "2026-10-07T12:01:00Z" },
+  ])("notifies on a new waiting turn: %j", async (patch) => {
+    row.termination_status = "awaiting_user";
+    await start();
+    await change(patch);
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("notifies after a rewind and resend repeats the completed turn's counts", async () => {
+    await start();
+    await change({ termination_status: "awaiting_user" });
+    await change({ termination_status: "clean", user_message_count: 0, total_output_tokens: 0 });
+    await change({
+      termination_status: "awaiting_user",
+      user_message_count: 1,
+      total_output_tokens: 100,
+      ended_at: "2026-10-07T12:01:00Z",
+    });
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    { started_at: "2026-10-07T11:59:55Z", sent: true },
+    { started_at: "2026-10-07T12:01:00Z", sent: true },
+    { started_at: "2026-10-07T11:59:54Z", sent: false },
+    { started_at: null, created_at: "2026-10-07T12:01:00Z", sent: true },
+    { started_at: "2026-10-07T11:00:00Z", created_at: "2026-10-07T12:01:00Z", sent: false },
+  ])("handles a first-seen waiting session: %j", async ({ sent, ...patch }) => {
+    list.mockResolvedValueOnce({ sessions: [], total: 0 });
+    await start();
+    vi.setSystemTime(new Date("2026-10-07T12:02:00Z"));
+    await change({ ...patch, termination_status: "awaiting_user" });
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(sent ? 1 : 0);
+  });
   it("ignores metadata and status flicker with the same key", async () => {
     row.termination_status = "awaiting_user";
     await start();
-    await change({ message_count: 3, ended_at: "invalid", display_name: "Renamed" });
+    await change({ message_count: 3, display_name: "Renamed" });
     await change({ termination_status: undefined });
     await change({ termination_status: "clean" });
     await change({ termination_status: "awaiting_user", message_count: 4 });
@@ -151,6 +179,36 @@ describe("desktop notification watcher", () => {
     session.mockRejectedValueOnce(new Error("unavailable"));
     await change({ termination_status: "awaiting_user" });
     await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("discovers a completion after refresh failures longer than ten minutes", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await start();
+    list.mockRejectedValue(new Error("unavailable"));
+    vi.setSystemTime(new Date("2026-10-07T12:01:00Z"));
+    await change({ termination_status: "awaiting_user", ended_at: "2026-10-07T12:01:00Z" });
+    vi.setSystemTime(new Date("2026-10-07T12:15:00Z"));
+    await change();
+    list.mockImplementation(async (params) => ({
+      sessions: Date.parse(row.ended_at!) >= Date.parse(params!.active_since!) ? [row] : [],
+      total: 1,
+    }));
+    vi.setSystemTime(new Date("2026-10-07T12:20:00Z"));
+    await change();
+    expect(list).toHaveBeenLastCalledWith({
+      active_since: "2026-10-07T12:00:00.000Z",
+      each_row: true,
+      include_one_shot: true,
+      cursor: undefined,
+    });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change();
+    expect(list).toHaveBeenLastCalledWith({
+      active_since: "2026-10-07T12:10:00.000Z",
+      each_row: true,
+      include_one_shot: true,
+      cursor: undefined,
+    });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("reads every page", async () => {

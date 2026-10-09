@@ -190,6 +190,8 @@ fixtures retain this field; missing identities remain source-local.
   a reply or prompt require full parsing. Older, headless, sidechain and
   unversioned records retain `end_turn`. Reverified with UUID-chained parser
   fixtures, filtered metadata and attachments, every append boundary and sync.
+  Reverified with incremental termination fixtures that an incomplete final
+  record returns no incremental verdict, including after a completion marker.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.

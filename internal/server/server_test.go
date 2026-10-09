@@ -638,21 +638,17 @@ func TestOpenAPIEachRowOnlyOnSessionList(t *testing.T) {
 		} `json:"paths"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-	for _, name := range []string{"each_row"} {
-		t.Run(name, func(t *testing.T) {
-			var routes []string
-			for path, methods := range spec.Paths {
-				for method, operation := range methods {
-					for _, parameter := range operation.Parameters {
-						if parameter.Name == name && parameter.In == "query" {
-							routes = append(routes, method+" "+path)
-						}
-					}
+	var routes []string
+	for path, methods := range spec.Paths {
+		for method, operation := range methods {
+			for _, parameter := range operation.Parameters {
+				if parameter.Name == "each_row" && parameter.In == "query" {
+					routes = append(routes, method+" "+path)
 				}
 			}
-			assert.Equal(t, []string{"get /api/v1/sessions"}, routes)
-		})
+		}
 	}
+	assert.Equal(t, []string{"get /api/v1/sessions"}, routes)
 }
 
 func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {

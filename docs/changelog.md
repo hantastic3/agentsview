@@ -14,10 +14,10 @@ The latest release is
 - Get a native desktop toast when the turn really ends and the agent waits
   for you, for providers that store a waiting state, including Claude Code. Enable
   notifications in Settings.
-  The first refresh, subagents, automated sessions, and the focused session
-  stay silent. A full re-import that relabels an old session can toast; sessions
-  that finish while trashed can toast after restoration. Missed updates arrive
-  within five minutes while the app runs.
+  Existing sessions on the first refresh, subagents, automated sessions, and the
+  focused session stay silent. A full re-import that relabels an old session can
+  toast; sessions that finish while trashed can toast after restoration. Missed
+  updates arrive within five minutes while the app runs.
 
 ## 0.45.0
 

@@ -17,7 +17,7 @@ export function notificationsAvailable(): boolean {
   return !!bridge();
 }
 
-export async function notificationPermissionGranted(): Promise<boolean> {
+async function notificationPermissionGranted(): Promise<boolean> {
   try {
     return (await bridge()?.isPermissionGranted()) ?? false;
   } catch {
@@ -36,7 +36,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 function turnKey(row: DbSession): string {
-  return `${row.user_message_count}:${row.total_output_tokens}`;
+  return `${row.ended_at}:${row.user_message_count}:${row.total_output_tokens}`;
 }
 
 const FRESHNESS_MS = 10 * 60_000;
@@ -45,6 +45,8 @@ const SAFETY_NET_REFRESH_MS = 5 * 60_000;
 
 export function startNotificationWatcher(viewingId: () => string | null): () => void {
   const seen = new Map<string, { key?: string; lastSeen: number }>();
+  const startedAt = Date.now();
+  let lastSuccessfulRefresh = startedAt;
   let stopped = false;
   let running = false;
   let pending = false;
@@ -58,7 +60,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
   }
 
   function send(row: DbSession) {
-    if (stopped || silent(row)) return;
+    if (silent(row)) return;
     const name = row.display_name || row.project || row.agent;
     bridge()?.sendNotification({
       title: m.notification_turn_end_title_suffix({ name }),
@@ -79,7 +81,9 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       let cursor: string | undefined;
       do {
         const result = await SessionsService.getApiV1Sessions({
-          active_since: new Date(fetchedAt - FRESHNESS_MS).toISOString(),
+          active_since: new Date(
+            Math.min(fetchedAt - FRESHNESS_MS, lastSuccessfulRefresh),
+          ).toISOString(),
           each_row: true,
           include_one_shot: true,
           cursor,
@@ -89,7 +93,11 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       } while (cursor && !stopped);
       if (stopped) return;
       for (const row of rows) {
-        const previous = seen.get(row.id);
+        const previous =
+          seen.get(row.id) ??
+          (Date.parse(row.started_at ?? row.created_at) >= startedAt - 5_000
+            ? { lastSeen: fetchedAt, key: undefined }
+            : undefined);
         const waiting = row.termination_status === "awaiting_user";
         const key = turnKey(row);
         seen.set(row.id, {
@@ -110,6 +118,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       for (const [id, entry] of seen) {
         if (entry.lastSeen < fetchedAt - RETENTION_MS) seen.delete(id);
       }
+      lastSuccessfulRefresh = fetchedAt;
     } catch (err) {
       console.warn("notification session read failed", err);
     } finally {
