@@ -1116,6 +1116,11 @@ func TestCurrentDataVersionCodexCacheWriteTokens(t *testing.T) {
 		"version 123 is the data-version boundary for Codex cache-write token normalization")
 }
 
+func TestCurrentDataVersionClaudePeerMessages(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 126,
+		"version 126 is the data-version boundary for Claude peer-message classification")
+}
+
 func TestCurrentDataVersionClaudeTurnDuration(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 128,
 		"version 128 is the data-version boundary for Claude turn-duration classification")
@@ -8467,7 +8472,6 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 	tests := []struct {
 		name              string
 		terminationStatus *string
-		preserveStatus    bool
 		wantStatus        string
 		wantNull          bool
 	}{
@@ -8480,8 +8484,6 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			name:     "nil clears status",
 			wantNull: true,
 		},
-		{name: "authoritative status overrides preservation", terminationStatus: new("interrupted"), preserveStatus: true, wantStatus: "interrupted"},
-		{name: "system-only append keeps status", preserveStatus: true, wantStatus: "tool_call_pending"},
 	}
 
 	for _, tt := range tests {
@@ -8494,8 +8496,7 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 			}), "seed session")
 
 			update := IncrementalSessionUpdate{
-				TerminationStatus:     tt.terminationStatus,
-				KeepTerminationStatus: tt.preserveStatus,
+				TerminationStatus: tt.terminationStatus,
 			}
 			require.NoError(t, d.UpdateSessionIncremental(t.Context(),
 				"incremental-status", update,

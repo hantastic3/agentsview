@@ -60,28 +60,22 @@ func TestListForwardsListOptions(t *testing.T) {
 
 func TestListForwardsEachRow(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		eachRow   bool
-		skipTotal bool
-		want      string
-		wantTotal string
+		name    string
+		eachRow bool
+		want    string
 	}{
 		{name: "default"},
 		{name: "each row", eachRow: true, want: "true"},
-		{name: "skip total", skipTotal: true, wantTotal: "true"},
-		{name: "each row without total", eachRow: true, skipTotal: true, want: "true", wantTotal: "true"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, tt.want, r.URL.Query().Get("each_row"))
 				assert.Equal(t, tt.eachRow, r.URL.Query().Has("each_row"))
-				assert.Equal(t, tt.wantTotal, r.URL.Query().Get("skip_total"))
-				assert.Equal(t, tt.skipTotal, r.URL.Query().Has("skip_total"))
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"sessions":[]}`))
 			}))
 			t.Cleanup(srv.Close)
-			_, err := NewHTTPBackend(srv.URL, "", false, "").List(t.Context(), service.ListFilter{EachRow: tt.eachRow, SkipTotal: tt.skipTotal})
+			_, err := NewHTTPBackend(srv.URL, "", false, "").List(t.Context(), service.ListFilter{EachRow: tt.eachRow})
 			require.NoError(t, err)
 		})
 	}

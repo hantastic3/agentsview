@@ -35,21 +35,16 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
+function turnKey(row: DbSession): string {
+  return `${row.user_message_count}:${row.total_output_tokens}`;
+}
+
 const FRESHNESS_MS = 10 * 60_000;
 const RETENTION_MS = 24 * 60 * 60_000;
 const SAFETY_NET_REFRESH_MS = 5 * 60_000;
 
 export function startNotificationWatcher(viewingId: () => string | null): () => void {
-  const seen = new Map<
-    string,
-    {
-      status?: string;
-      user_message_count: number;
-      message_count: number;
-      assistant_id?: string | number;
-      activity: number;
-    }
-  >();
+  const seen = new Map<string, { key?: string; lastSeen: number }>();
   let stopped = false;
   let running = false;
   let pending = false;
@@ -86,7 +81,6 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         const result = await SessionsService.getApiV1Sessions({
           active_since: new Date(fetchedAt - FRESHNESS_MS).toISOString(),
           each_row: true,
-          skip_total: true,
           include_one_shot: true,
           cursor,
         });
@@ -95,78 +89,26 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       } while (cursor && !stopped);
       if (stopped) return;
       for (const row of rows) {
-        const activity = Date.parse(row.ended_at || row.started_at || "");
         const previous = seen.get(row.id);
-        const entry = {
-          status: row.termination_status,
-          user_message_count: row.user_message_count,
-          message_count: row.message_count,
-          assistant_id: previous?.assistant_id,
-          activity,
-        };
-        const activityChanged = !!previous && previous.activity !== activity;
-        let turnEnd =
-          !!previous &&
-          row.termination_status === "awaiting_user" &&
-          (previous.status !== "awaiting_user" ||
-            previous.user_message_count !== row.user_message_count);
+        const waiting = row.termination_status === "awaiting_user";
+        const key = turnKey(row);
+        seen.set(row.id, {
+          key: previous ? previous.key : waiting ? key : undefined,
+          lastSeen: fetchedAt,
+        });
+        if (!previous || !waiting || previous.key === key) continue;
         try {
-          if (
-            row.termination_status === "awaiting_user" &&
-            (!previous || turnEnd || activityChanged || row.message_count > previous.message_count)
-          ) {
-            let remaining =
-              !previous || turnEnd || activityChanged
-                ? row.message_count
-                : row.message_count - previous.message_count;
-            let from: number | undefined;
-            while (remaining > 0 && !stopped) {
-              const result = await SessionsService.getApiV1SessionsByIdMessages(
-                { id: row.id },
-                { direction: "desc", limit: remaining, ...(from === undefined ? {} : { from }) },
-              );
-              if (!result.messages.length) break;
-              const assistant = result.messages.find(
-                (message) =>
-                  !message.is_system &&
-                  !message.is_compact_boundary &&
-                  message.role === "assistant",
-              );
-              if (assistant) {
-                const assistantId = assistant.source_uuid || assistant.id;
-                turnEnd ||= !!previous && assistantId !== previous.assistant_id;
-                entry.assistant_id = assistantId;
-                break;
-              }
-              remaining -= result.messages.length;
-              from = result.messages[result.messages.length - 1]!.ordinal - 1;
-              if (from < 0) break;
-            }
-          }
-          if (
-            turnEnd ||
-            (previous &&
-              row.termination_status === "awaiting_user" &&
-              (activityChanged || row.message_count > previous.message_count))
-          ) {
-            const current = await SessionsService.getApiV1SessionsById({ id: row.id });
-            if (
-              current.termination_status !== "awaiting_user" ||
-              current.user_message_count !== row.user_message_count ||
-              current.message_count !== row.message_count ||
-              current.ended_at !== row.ended_at
-            )
-              continue;
-            if (turnEnd) send(current);
-          }
+          const current = await SessionsService.getApiV1SessionsById({ id: row.id });
+          if (stopped) return;
+          if (current.termination_status !== "awaiting_user" || turnKey(current) !== key) continue;
+          send(current);
+          seen.set(row.id, { key, lastSeen: fetchedAt });
         } catch (err) {
           console.warn("notification turn-end read failed", err);
-          continue;
         }
-        seen.set(row.id, entry);
       }
       for (const [id, entry] of seen) {
-        if (entry.activity < fetchedAt - RETENTION_MS) seen.delete(id);
+        if (entry.lastSeen < fetchedAt - RETENTION_MS) seen.delete(id);
       }
     } catch (err) {
       console.warn("notification session read failed", err);

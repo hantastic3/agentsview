@@ -18374,109 +18374,31 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 	}
 }
 
-func TestIncrementalSync_ClaudeToolResultClearsPendingStatus(t *testing.T) {
+func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 	env := setupTestEnv(t)
-	initial := testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("read the file", tsEarly),
-		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"read-1","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
-	)
-	path := env.writeClaudeSession(t, "proj-tools", "tools.jsonl", initial)
+	const producer = `"entrypoint":"cli","version":"2.1.266",`
+	initial := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)), producer, 0)
+	path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
 	env.engine.SyncAll(t.Context(), nil)
-	session, err := env.db.GetSessionFull(t.Context(), "tools")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	require.NotNil(t, session.TerminationStatus)
-	require.Equal(t, "tool_call_pending", *session.TerminationStatus)
-	require.Equal(t, 2, session.MessageCount)
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(testjsonl.ClaudeToolResultUserJSON("read-1", "file contents", tsEarlyS5) + "\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	env.engine.SyncPaths([]string{path})
-
-	session, err = env.db.GetSessionFull(t.Context(), "tools")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Nil(t, session.TerminationStatus)
-	assert.Equal(t, 2, session.MessageCount)
-	assert.True(t, session.LastWriteIncremental)
-}
-
-func TestIncrementalSync_ClaudeTurnStatusTails(t *testing.T) {
-	t.Run("completed partial record followed by system-only metadata", func(t *testing.T) {
-		env := setupTestEnv(t)
-		metadata := claudeNotificationTranscript(testjsonl.ClaudeUserJSON("<task-notification>background task finished</task-notification>", tsEarlyS5))
-		partialAt := len(metadata) / 2
-		initial := claudeNotificationTranscript(testjsonl.JoinJSONL(
-			testjsonl.ClaudeUserJSON("hello", tsEarly),
-			testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn"),
-		))
-		path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial+metadata[:partialAt])
-		env.engine.SyncAll(t.Context(), nil)
+	for i, step := range []struct {
+		line, status string
+		incremental  bool
+	}{
+		{testjsonl.ClaudeAssistantJSON("done", tsEarlyS5, "end_turn"), "clean", true},
+		{`{"type":"system","subtype":"turn_duration"}`, "awaiting_user", false},
+	} {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		_, err = f.WriteString(testjsonl.ClaudeChainJSONL(t, step.line+"\n", producer, i+1))
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		env.engine.SyncPaths([]string{path})
 		session, err := env.db.GetSessionFull(t.Context(), "notify")
 		require.NoError(t, err)
 		require.NotNil(t, session)
 		require.NotNil(t, session.TerminationStatus)
-		require.Equal(t, "truncated", *session.TerminationStatus)
-
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-		require.NoError(t, err)
-		_, err = f.WriteString(metadata[partialAt:] + "\n" + metadata + "\n")
-		require.NoError(t, err)
-		require.NoError(t, f.Close())
-		env.engine.SyncPaths([]string{path})
-		session, err = env.db.GetSessionFull(t.Context(), "notify")
-		require.NoError(t, err)
-		require.NotNil(t, session)
-		assert.Nil(t, session.TerminationStatus)
-		assert.True(t, session.LastWriteIncremental)
-	})
-	answer := testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n"
-	for _, tc := range []struct {
-		name  string
-		tails []string
-		want  []string
-	}{
-		{"system-only task notification", []string{answer, testjsonl.ClaudeUserJSON("<task-notification>background task finished</task-notification>", tsEarlyS5) + "\n"}, []string{"clean", "clean"}},
-		{
-			name: "system reminder resolves pending tool call",
-			tails: []string{
-				`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"read-1","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n",
-				`{"type":"user","timestamp":"2024-01-01T10:00:05Z","message":{"content":[{"type":"text","text":"<system-reminder>file read finished</system-reminder>"},{"type":"tool_result","tool_use_id":"read-1","content":"file contents"}]}}` + "\n",
-			},
-			want: []string{"tool_call_pending", ""},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			env := setupTestEnv(t)
-			path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", claudeNotificationTranscript(testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly))))
-			env.engine.SyncAll(t.Context(), nil)
-			for i, tail := range tc.tails {
-				tail = claudeNotificationTranscript(tail)
-				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-				require.NoError(t, err)
-				_, err = f.WriteString(tail)
-				require.NoError(t, err)
-				require.NoError(t, f.Close())
-				env.engine.SyncPaths([]string{path})
-				session, err := env.db.GetSessionFull(t.Context(), "notify")
-				require.NoError(t, err)
-				require.NotNil(t, session)
-				if tc.want[i] == "" {
-					assert.Nil(t, session.TerminationStatus)
-				} else {
-					require.NotNil(t, session.TerminationStatus)
-					assert.Equal(t, tc.want[i], *session.TerminationStatus)
-				}
-				assert.True(t, session.LastWriteIncremental)
-			}
-		})
+		assert.Equal(t, step.status, *session.TerminationStatus)
+		assert.Equal(t, 2, session.MessageCount)
+		assert.Equal(t, step.incremental, session.LastWriteIncremental)
 	}
-}
-
-func claudeNotificationTranscript(content string) string {
-	const producer = `"entrypoint":"cli","version":"2.1.266",`
-	return testjsonl.ClaudeProducerJSONL(content, producer)
 }

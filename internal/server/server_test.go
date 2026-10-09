@@ -638,7 +638,7 @@ func TestOpenAPIEachRowOnlyOnSessionList(t *testing.T) {
 		} `json:"paths"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-	for _, name := range []string{"each_row", "skip_total"} {
+	for _, name := range []string{"each_row"} {
 		t.Run(name, func(t *testing.T) {
 			var routes []string
 			for path, methods := range spec.Paths {
@@ -1650,24 +1650,14 @@ func TestListSessions_EachRowActiveSince(t *testing.T) {
 		s.RelationshipType = "fork"
 		s.EndedAt = new("2024-06-03T10:00:00Z")
 	})
-	for _, tt := range []struct {
-		name      string
-		query     string
-		wantTotal int
-	}{
-		{name: "counted", wantTotal: 1},
-		{name: "skip total", query: "&skip_total=true"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			w := te.get(t, "/api/v1/sessions?each_row=true&include_one_shot=true&active_since=2024-06-03T00:00:00Z"+tt.query)
-			assertStatus(t, w, http.StatusOK)
-			resp := decode[sessionListResponse](t, w)
-			require.Len(t, resp.Sessions, 1)
-			assert.Equal(t, "recent-fork", resp.Sessions[0].ID)
-			assert.Equal(t, "fork", resp.Sessions[0].RelationshipType)
-			assert.Equal(t, tt.wantTotal, resp.Total)
-		})
-	}
+	w := te.get(t, "/api/v1/sessions?each_row=true&include_one_shot=true&active_since=2024-06-03T00:00:00Z")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[sessionListResponse](t, w)
+	require.Len(t, resp.Sessions, 1)
+	assert.Equal(t, "recent-fork", resp.Sessions[0].ID)
+	assert.Equal(t, "fork", resp.Sessions[0].RelationshipType)
+	assert.Equal(t, 1, resp.Total)
+
 }
 
 func TestListSessions_ExcludeOneShotDefault(t *testing.T) {

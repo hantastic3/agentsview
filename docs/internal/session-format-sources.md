@@ -176,64 +176,20 @@ fixtures retain this field; missing identities remain source-local.
   identities and usage, then checks actual parsed counts. These synthetic
   records are a measured subset, not an authoritative or exhaustive schema.
 
-- **Turn completion evidence (2026-10-07):** Verified interactive Claude Code
-  transcripts, entrypoint `cli`, versions 2.1.259 through 2.1.266, write
-  `system/turn_duration` after the final `stop_hook_summary`. A blocked Stop
-  hook writes assistant `end_turn`, user `Stop hook feedback`, and
-  `stop_hook_summary` with `hookErrors`, without a `turn_duration`. An allowed
-  stop then writes another `end_turn`, a successful hook summary, and
-  `turn_duration`. Background-agent turns record
-  `pendingBackgroundAgentCount`, for example 8, then a task notification,
-  `end_turn`, and another duration with 7 pending. The count is absent at zero.
-  Headless `claude -p`, entrypoint `sdk-cli`, writes no `turn_duration`.
-  These records stay outside the stored messages.
-
-  Reverified 2026-10-08 against the Claude Code 2.1.293 executable. The duration
-  producer writes `pendingWorkflowCount` beside `pendingBackgroundAgentCount`
-  and omits both at zero. Completion requires absent or zero integer counts.
-  Negative or malformed counts keep the turn incomplete. Duration
-  parents can point to a system `stop_hook_summary`; full parsing resolves
-  system ancestry to the owning user or assistant record in the same branch.
-  The 2.1.293 deferred swarm duration can follow a new prompt and use the
-  current transcript leaf as its parent. A duration cannot finish an unanswered
-  user prompt. Mixed message and duration tails validate ancestry too; an
-  unresolved parent requires a full parse. Duration-only tails check the last
-  stored message and fall back for unanswered prompts, including queued-command
-  attachments. A duration parented to a stored system-promoted user record
-  already falls back when its UUID differs from the substantive stored tail.
-  Reverified 2026-10-09 with `TestClaudeTurnDuration`: a task notification and
-  its duration require full parsing at both append boundaries. Appended
-  system-promoted user records with a duration also trigger this fallback.
-  Each branch advances `EndedAt` to its resolved duration timestamp.
-
-  Reverified 2026-10-08 against the 2.1.294 bundle, SHA-256
-  `1f6471eb5a1c21a1f8b54a7827329d64433424dcce51717a54e837adb542163a`.
-  Its `Ae` user constructor supplies `uuid:Ze||(hn?hn():Uh())`; `CAn`
-  supplies assistant UUIDs with `uuid:he()`, defaulting `he` to `Uh`.
-  `Uh` imports `randomUUID` from `crypto`. The wire importer fills missing
-  user and assistant UUIDs with `s.uuid??co()`, and `insertMessageChain`
-  preserves those UUIDs when writing JSONL. UUID-less CLI message fixtures
-  do not represent this producer.
-
-- **Incremental turn status (2026-10-07):** Each message line with entrypoint
-  `cli`, version 2.1.259 or newer, and `isSidechain` false uses `turn_duration`
-  to finish the turn. Full parsing requires a later duration in the same branch
-  with zero pending background agents and workflows. Forks use their own
-  duration records.
-  That duration supersedes pending tool calls; truncation keeps precedence.
-  Until completion, an `end_turn` gives `clean`. Older CLI,
-  headless, sidechain, and unversioned lines keep the `end_turn` signal.
-  Incremental parsing uses only appended lines. A duration-only tail uses its
-  own producer fields and gives `awaiting_user` at zero pending agents and
-  workflows or `clean` otherwise. Its ancestry must reach the latest stored
-  message. An unresolved parent requires a full parse, which preserves the
-  current turn when the duration belongs to an older message. System-only
-  and result-only tails preserve stored status.
-  User replies give `clean`. Partial trailing lines wait for the next append.
-  Reverified against the parser and sync
-  fixtures in `TestClaudeTurnDuration`, `TestClaudeTurnDurationPrecedence`,
-  `TestClaudeProviderIncrementalTermination`, and
-  `TestIncrementalSync_ClaudeTurnStatusTails`.
+- **Turn completion evidence, reverified 2026-10-09:** Interactive CLI
+  2.1.259 and newer writes `system/turn_duration` after successful Stop hooks.
+  The 2.1.293 producer omits zero `pendingBackgroundAgentCount` and
+  `pendingWorkflowCount`. Only absent or integer zero counts finish a turn.
+  The 2.1.294 bundle uses `crypto.randomUUID` for user and assistant records;
+  `insertMessageChain` preserves them, chaining through system and attachment
+  records. Public producer source is unavailable; evidence comes from the
+  installed bundles and transcripts.
+  Full and incremental parsing use line order. The last duration after the
+  last visible message, before the next branch's visible message, decides.
+  An unanswered prompt and truncation retain precedence. Duration tails without
+  a reply or prompt require full parsing. Older, headless, sidechain and
+  unversioned records retain `end_turn`. Reverified with UUID-chained parser
+  fixtures, filtered metadata and attachments, every append boundary and sync.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.

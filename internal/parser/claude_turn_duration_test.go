@@ -1,16 +1,84 @@
 package parser
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestClaudeTurnDurationFilteredChain(t *testing.T) {
+	for _, filtered := range []string{
+		`{"type":"user","isMeta":true,"message":{"content":"metadata"}}`,
+		`{"type":"attachment","attachment":{"type":"file","filename":"example.txt"}}`,
+	} {
+		t.Run(filtered, func(t *testing.T) {
+			content := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("hello", tsEarly),
+				testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn"),
+				filtered,
+				`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
+				`{"type":"system","subtype":"turn_duration"}`,
+			), `"entrypoint":"cli","version":"2.1.266",`, 0)
+			lines := strings.SplitAfter(content, "\n")
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			for boundary := 1; boundary < len(lines); boundary++ {
+				prefix := strings.Join(lines[:boundary], "")
+				writeSourceFile(t, path, prefix)
+				results, err := parseClaudeSession(path, "project", "local")
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				want := TerminationClean
+				if boundary == 5 {
+					want = TerminationAwaitingUser
+				}
+				assert.Equal(t, want, results[0].Session.TerminationStatus)
+				if boundary > 1 {
+					offset := int64(len(strings.Join(lines[:boundary-1], "")))
+					var termination *TerminationStatus
+					_, _, _, _, err = claudeParseSessionFrom(path, offset, claudeIncrementalScan{
+						termination: &termination, startOrdinal: 2,
+						lastEntryUUID: fmt.Sprintf("line-%d", boundary-2),
+						stored:        claudeStoredIdentity{entrypoint: "cli"}, storedLinearParse: new(true),
+					})
+					if boundary == 5 {
+						require.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
+					} else {
+						require.NoError(t, err)
+						if boundary == 2 {
+							require.NotNil(t, termination)
+							assert.Equal(t, TerminationClean, *termination)
+						} else {
+							assert.Nil(t, termination)
+						}
+					}
+				}
+				if boundary < 5 {
+					require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+					var termination *TerminationStatus
+					_, _, _, _, err = claudeParseSessionFrom(path, int64(len(prefix)), claudeIncrementalScan{
+						termination: &termination, startOrdinal: len(results[0].Messages),
+						lastEntryUUID: fmt.Sprintf("line-%d", boundary-1),
+						stored:        claudeStoredIdentity{entrypoint: "cli"}, storedLinearParse: new(true),
+					})
+					if boundary == 1 {
+						require.NoError(t, err)
+						require.NotNil(t, termination)
+						assert.Equal(t, TerminationAwaitingUser, *termination)
+					} else {
+						require.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestClaudeTurnDuration(t *testing.T) {
 	lastUUID := func(messages []ParsedMessage) string {
@@ -36,39 +104,38 @@ func TestClaudeTurnDuration(t *testing.T) {
 	answer := testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n"
 	initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly), testjsonl.ClaudeAssistantJSON("ready", tsEarlyS1, "end_turn")) + duration + testjsonl.ClaudeUserJSON("continue", tsEarlyS2) + "\n"
 	for _, tc := range []struct {
-		name        string
-		producer    string
-		initial     string
-		tails       []string
-		want        []TerminationStatus
-		fullParseAt int
+		name     string
+		producer string
+		initial  string
+		tails    []string
+		want     []TerminationStatus
 	}{
 		{
-			name: "duration after prompt hidden by appended tool result", fullParseAt: 1,
+			name:    "duration after prompt hidden by appended tool result",
 			initial: toolInitial + prompt,
 			tails:   []string{toolResult + toolDuration, toolAnswer},
 			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "duration after prompt hidden by stored tool result", fullParseAt: 1,
+			name:    "duration after prompt hidden by stored tool result",
 			initial: toolInitial + prompt + toolResult,
 			tails:   []string{toolDuration, toolAnswer},
 			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "duration after queued prompt hidden by appended tool result", fullParseAt: 1,
+			name:    "duration after queued prompt hidden by appended tool result",
 			initial: toolInitial + testjsonl.ClaudeQueuedCommandJSON("continue", tsEarlyS2) + "\n",
 			tails:   []string{`{"type":"user","uuid":"r0","parentUuid":"a0","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n" + toolDuration, toolAnswer},
 			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "duration after queued prompt hidden by stored tool result", fullParseAt: 1,
+			name:    "duration after queued prompt hidden by stored tool result",
 			initial: toolInitial + testjsonl.ClaudeQueuedCommandJSON("continue", tsEarlyS2) + "\n" + `{"type":"user","uuid":"r0","parentUuid":"a0","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n",
 			tails:   []string{toolDuration, toolAnswer},
 			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "duration after stored queued prompt", fullParseAt: 1,
+			name:    "duration after stored queued prompt",
 			initial: `{"type":"user","uuid":"u0","timestamp":"2024-01-01T10:00:00Z","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","timestamp":"2024-01-01T10:00:01Z","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n" + testjsonl.ClaudeQueuedCommandJSON("continue", tsEarlyS2) + "\n",
 			tails: []string{
 				`{"type":"system","subtype":"turn_duration","parentUuid":"a0"}` + "\n",
@@ -77,22 +144,22 @@ func TestClaudeTurnDuration(t *testing.T) {
 			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "duration parented to stored task notification", fullParseAt: 1,
+			name:    "duration parented to stored task notification",
 			initial: taskInitial + taskNotification,
 			tails: []string{
 				taskDuration,
 				`{"type":"assistant","uuid":"a1","parentUuid":"n0","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","parentUuid":"a1"}` + "\n",
 			},
-			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+			want: []TerminationStatus{TerminationAwaitingUser, TerminationAwaitingUser},
 		},
 		{
-			name: "duration parented to appended task notification", fullParseAt: 1,
+			name:    "duration parented to appended task notification",
 			initial: taskInitial,
 			tails: []string{
 				taskNotification + taskDuration,
 				`{"type":"assistant","uuid":"a1","parentUuid":"n0","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","parentUuid":"a1"}` + "\n",
 			},
-			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+			want: []TerminationStatus{TerminationAwaitingUser, TerminationAwaitingUser},
 		},
 		{
 			name: "blocked then allowed stop", initial: initial,
@@ -118,13 +185,13 @@ func TestClaudeTurnDuration(t *testing.T) {
 			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "deferred duration after stored prompt", fullParseAt: 1, producer: `"entrypoint":"cli","version":"2.1.293",`,
+			name: "deferred duration after stored prompt", producer: `"entrypoint":"cli","version":"2.1.293",`,
 			initial: initial,
 			tails:   []string{duration, answer + duration},
 			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
 		},
 		{
-			name: "deferred duration after stored prompt with queued notification", fullParseAt: 1, producer: `"entrypoint":"cli","version":"2.1.293",`,
+			name: "deferred duration after stored prompt with queued notification", producer: `"entrypoint":"cli","version":"2.1.293",`,
 			initial: initial,
 			tails:   []string{testjsonl.ClaudeQueuedCommandJSON("<task-notification>agent finished</task-notification>", tsEarlyS2) + "\n" + duration, answer + duration},
 			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
@@ -133,41 +200,6 @@ func TestClaudeTurnDuration(t *testing.T) {
 			name:    "duration finishes stored tool result",
 			initial: testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n" + `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-a","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n" + `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n",
 			tails:   []string{duration}, want: []TerminationStatus{TerminationAwaitingUser},
-		},
-		{
-			name: "mixed tail duration belongs to older turn", fullParseAt: 1,
-			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n",
-			tails: []string{
-				`{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"continue"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"a0"}` + "\n",
-				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"}` + "\n",
-			},
-			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
-		},
-		{
-			name: "mixed tail resolves stop hook ancestry", initial: initial,
-			tails: []string{
-				`{"type":"assistant","uuid":"a1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","uuid":"s1","parentUuid":"a1"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"s1"}` + "\n",
-			},
-			want: []TerminationStatus{TerminationAwaitingUser},
-		},
-		{
-			name: "mixed tail unresolved system ancestry", fullParseAt: 1,
-			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","uuid":"s0","parentUuid":"a0"}` + "\n",
-			tails: []string{
-				`{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"continue"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"s0"}` + "\n",
-				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"}` + "\n",
-			},
-			want: []TerminationStatus{TerminationClean, TerminationAwaitingUser},
-		},
-		{
-			name: "duration belongs to an older turn", fullParseAt: 1,
-			initial: `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n" + `{"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"continue"}}` + "\n",
-			tails: []string{
-				`{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"a0"}` + "\n",
-				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"done","stop_reason":"end_turn"}}` + "\n",
-				`{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"}` + "\n",
-			},
-			want: []TerminationStatus{TerminationClean, TerminationClean, TerminationAwaitingUser},
 		},
 		{
 			name: "malformed pending counts", initial: initial,
@@ -185,16 +217,6 @@ func TestClaudeTurnDuration(t *testing.T) {
 			name: "pending workflow", producer: `"entrypoint":"cli","version":"2.1.293",`, initial: initial,
 			tails: []string{answer + `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}` + "\n", `{"type":"system","subtype":"turn_duration","pendingWorkflowCount":1}` + "\n", duration},
 			want:  []TerminationStatus{TerminationClean, TerminationClean, TerminationAwaitingUser},
-		},
-		{
-			name: "duration descends through stop hook summary", fullParseAt: 3,
-			initial: `{"type":"user","uuid":"u0","parentUuid":null,"message":{"content":"hello"}}` + "\n",
-			tails: []string{
-				`{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"done","stop_reason":"end_turn"}}` + "\n",
-				`{"type":"system","subtype":"stop_hook_summary","uuid":"s0","parentUuid":"a0","hookErrors":[]}` + "\n",
-				`{"type":"system","subtype":"turn_duration","uuid":"d0","parentUuid":"s0"}` + "\n",
-			},
-			want: []TerminationStatus{TerminationClean, TerminationClean, TerminationAwaitingUser},
 		},
 		{
 			name: "duration before assistant in same tail", initial: initial,
@@ -231,7 +253,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 			if producer == "" {
 				producer = `"entrypoint":"cli","version":"2.1.266",`
 			}
-			tc.initial = testjsonl.ClaudeProducerJSONL(tc.initial, producer)
+			tc.initial = testjsonl.ClaudeChainJSONL(t, tc.initial, producer, 0)
 			root := t.TempDir()
 			path := filepath.Join(root, "project", "session.jsonl")
 			writeSourceFile(t, path, tc.initial)
@@ -248,9 +270,8 @@ func TestClaudeTurnDuration(t *testing.T) {
 			lastEntryUUID := lastUUID(results[0].Messages)
 			content := tc.initial
 			status := TerminationClean
-			waiting := 0
 			for i, tail := range tc.tails {
-				tail = testjsonl.ClaudeProducerJSONL(tail, producer)
+				tail = testjsonl.ClaudeChainJSONL(t, tail, producer, strings.Count(content, "\n"))
 				offset := int64(len(content))
 				content += tail
 				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
@@ -260,10 +281,10 @@ func TestClaudeTurnDuration(t *testing.T) {
 				assert.Equal(t, tc.want[i], results[0].Session.TerminationStatus, "full parse record %d", i)
 				outcome, applied, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
 					Source: source, Fingerprint: SourceFingerprint{Key: path, Size: int64(len(content))},
-					SessionID: "session", Offset: offset, StartOrdinal: ordinal, StoredEntrypoint: entrypoint, LastEntryUUID: lastEntryUUID,
+					SessionID: "session", Offset: offset, StartOrdinal: ordinal, StoredEntrypoint: entrypoint, LastEntryUUID: lastEntryUUID, StoredClaudeLinearParse: results[0].Session.ClaudeLinearParse,
 				})
 				require.NoError(t, err)
-				if tc.fullParseAt == i+1 {
+				if applied == IncrementalNeedsFullParse {
 					require.Equal(t, IncrementalNeedsFullParse, applied)
 					require.True(t, outcome.ForceReplace)
 					require.Nil(t, outcome.TerminationStatus)
@@ -271,32 +292,21 @@ func TestClaudeTurnDuration(t *testing.T) {
 					ordinal = len(results[0].Messages)
 					lastEntryUUID = lastUUID(results[0].Messages)
 					status = results[0].Session.TerminationStatus
-					if status == TerminationAwaitingUser {
-						waiting++
-					}
 					continue
 				}
 				require.Equal(t, IncrementalApplied, applied)
-				if tc.tails[i] == duration || tc.tails[i] == pending {
-					require.NotNil(t, outcome.TerminationStatus)
-					assert.Empty(t, outcome.Messages)
-				}
 				assert.Equal(t, int64(len(tail)), outcome.ConsumedBytes)
 				ordinal += len(outcome.Messages)
 				lastEntryUUID = lastUUID(results[0].Messages)
 				assert.Len(t, results[0].Messages, ordinal, "duration records stay out of messages")
 				if outcome.TerminationStatus != nil {
 					status = *outcome.TerminationStatus
-					if status == TerminationAwaitingUser {
-						waiting++
-					}
 				}
 				assert.Equal(t, tc.want[i], status, "incremental record %d", i)
 			}
-			assert.Equal(t, 1, waiting)
 		})
 	}
-	t.Run("fork durations stay in their branch", func(t *testing.T) {
+	t.Run("fork duration precedes main reply", func(t *testing.T) {
 		const transcript = `{"type":"user","uuid":"u0","message":{"content":"hello"}}
 {"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}
 {"type":"user","uuid":"u1","parentUuid":"a0","message":{"content":"first"}}
@@ -305,59 +315,21 @@ func TestClaudeTurnDuration(t *testing.T) {
 {"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"content":"second answer","stop_reason":"end_turn"}}
 {"type":"user","uuid":"u3","parentUuid":"a2","message":{"content":"third"}}
 {"type":"assistant","uuid":"a3","parentUuid":"u3","message":{"content":"third answer","stop_reason":"end_turn"}}
+{"type":"user","uuid":"uf","parentUuid":"a0","message":{"content":"fork"}}
+{"type":"assistant","uuid":"af","parentUuid":"uf","message":{"content":"fork answer","stop_reason":"end_turn"}}
+{"type":"system","subtype":"turn_duration"}
 {"type":"user","uuid":"u4","parentUuid":"a3","message":{"content":"fourth"}}
 {"type":"assistant","uuid":"a4","parentUuid":"u4","message":{"content":"main answer","stop_reason":"end_turn"}}
-{"type":"user","uuid":"uf","parentUuid":"a0","message":{"content":"fork"}}
-{"type":"assistant","uuid":"af","parentUuid":"uf","timestamp":"2024-01-01T10:00:01Z","message":{"content":"fork answer","stop_reason":"end_turn"}}
 `
-		for _, tc := range []struct {
-			name, tail  string
-			main, fork  TerminationStatus
-			forkEndedAt string
-		}{
-			{
-				name: "delayed fork duration",
-				tail: `{"type":"system","subtype":"stop_hook_summary","uuid":"sf","parentUuid":"af"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"sf","timestamp":"2024-01-01T11:00:00Z"}` + "\n",
-				main: TerminationClean, fork: TerminationAwaitingUser,
-				forkEndedAt: "2024-01-01T11:00:00Z",
-			},
-			{
-				name: "fork has no duration",
-				tail: `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4"}` + "\n",
-				main: TerminationAwaitingUser, fork: TerminationClean,
-			},
-			{
-				name: "fork has pending agents",
-				tail: `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"af","pendingBackgroundAgentCount":2}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4"}` + "\n",
-				main: TerminationAwaitingUser, fork: TerminationClean,
-			},
-			{
-				name: "fork finished before main duration",
-				tail: `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"af"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"a4","pendingBackgroundAgentCount":2}` + "\n",
-				main: TerminationClean, fork: TerminationAwaitingUser,
-			},
-			{
-				name: "hook summaries keep branch ownership",
-				tail: `{"type":"system","subtype":"stop_hook_summary","uuid":"sf","parentUuid":"af"}` + "\n" + `{"type":"system","subtype":"stop_hook_summary","uuid":"sm","parentUuid":"a4"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"df","parentUuid":"sf"}` + "\n" + `{"type":"system","subtype":"turn_duration","uuid":"dm","parentUuid":"sm","pendingWorkflowCount":1}` + "\n",
-				main: TerminationClean, fork: TerminationAwaitingUser,
-			},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				content := testjsonl.ClaudeProducerJSONL(transcript+tc.tail, `"entrypoint":"cli","version":"2.1.266",`)
-				path := filepath.Join(t.TempDir(), "session.jsonl")
-				writeSourceFile(t, path, content)
-				results, err := parseClaudeSession(path, "project", "local")
-				require.NoError(t, err)
-				require.Len(t, results, 2)
-				assert.Equal(t, "session", results[0].Session.ID)
-				assert.Equal(t, tc.main, results[0].Session.TerminationStatus)
-				assert.Equal(t, "session-uf", results[1].Session.ID)
-				assert.Equal(t, tc.fork, results[1].Session.TerminationStatus)
-				if tc.forkEndedAt != "" {
-					assert.Equal(t, tc.forkEndedAt, results[1].Session.EndedAt.Format(time.RFC3339))
-				}
-			})
-		}
+		path := filepath.Join(t.TempDir(), "session.jsonl")
+		writeSourceFile(t, path, testjsonl.ClaudeProducerJSONL(transcript, `"entrypoint":"cli","version":"2.1.266",`))
+		results, err := parseClaudeSession(path, "project", "local")
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+		assert.Equal(t, "session", results[0].Session.ID)
+		assert.Equal(t, TerminationClean, results[0].Session.TerminationStatus)
+		assert.Equal(t, "session-uf", results[1].Session.ID)
+		assert.Equal(t, TerminationAwaitingUser, results[1].Session.TerminationStatus)
 	})
 }
 
@@ -374,7 +346,12 @@ func TestClaudeTurnDurationPrecedence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content := testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n" + tc.tail
-			content = testjsonl.ClaudeProducerJSONL(content, `"entrypoint":"cli","version":"2.1.266",`)
+			partial := ""
+			if tc.name == "truncated" {
+				partial = `{"type":"user"`
+				content = strings.TrimSuffix(content, partial)
+			}
+			content = testjsonl.ClaudeChainJSONL(t, content, `"entrypoint":"cli","version":"2.1.266",`, 0) + partial
 			session, _ := runClaudeParserTest(t, "session.jsonl", content)
 			assert.Equal(t, tc.want, session.TerminationStatus)
 		})

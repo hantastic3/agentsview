@@ -568,9 +568,8 @@ type SessionFilter struct {
 	ChildExemptOneShot bool
 	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
 	AutomatedScope     string   // "", "human", "all", or "automated"
-	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	EachRow            bool     // apply filters to each row, including children
-	SkipTotal          bool     // skip counting matches; total is zero
+	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	IncludeEmpty       bool     // include zero-message sessions for project mapping
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
 	IncludeSource      bool     // include the session source file path in list rows
@@ -712,14 +711,12 @@ func (db *DB) ListSessions(
 		if err != nil {
 			return SessionPage{}, err
 		}
-		if !f.SkipTotal {
-			total = cur.Total
-		}
+		total = cur.Total
 	}
 	// Total count applies filters but not cursor. To avoid
 	// re-counting on every pagination request, newer cursors carry
 	// the first-page total and we reuse it here.
-	if !f.SkipTotal && total <= 0 {
+	if total <= 0 {
 		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
 		if err := db.getReader().QueryRowContext(
 			ctx, countQuery, args...,
@@ -2861,7 +2858,6 @@ type MessageTokenUsageUpdate struct {
 type IncrementalSessionUpdate struct {
 	EndedAt                  *string
 	TerminationStatus        *string
-	KeepTerminationStatus    bool
 	MsgCount                 int
 	UserMsgCount             int
 	FileSize                 int64
@@ -3062,8 +3058,10 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 // at insert; the incremental path never re-evaluates it).
 //
 // A non-nil termination_status is an authoritative incremental verdict and
-// is stored as-is. Nil keeps the stored status only when the caller marks
-// the parsed append as system-only; otherwise it clears it.
+// is stored as-is. Nil clears the status for parsers such as Claude whose
+// incremental path only sees the new tail and needs the full message slice
+// to classify termination reliably. Clearing prevents a stale prior verdict
+// from remaining visible until the next full sync reclassifies the session.
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {
@@ -3085,7 +3083,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			termination_status = CASE WHEN ? IS NULL AND ? AND termination_status <> 'truncated' THEN termination_status ELSE ? END,
+			termination_status = ?,
 			-- Mark the row as last written by the incremental-append path.
 			-- The full-replace writer (upsertSessionArgs) resets this to
 			-- false; parse-diff reads it to classify benign
@@ -3098,7 +3096,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
 		update.HasTotalOutputTokens, update.HasPeakContextTokens,
-		update.TerminationStatus, update.KeepTerminationStatus, update.TerminationStatus, id,
+		update.TerminationStatus, id,
 	)
 	if err != nil {
 		return fmt.Errorf(

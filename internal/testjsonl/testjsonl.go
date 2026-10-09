@@ -6,8 +6,32 @@ package testjsonl
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"strconv"
 	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+// ClaudeChainJSONL stamps the producer and chains every record, including system lines.
+func ClaudeChainJSONL(t testing.TB, content, producer string, start int) string {
+	t.Helper()
+	var result strings.Builder
+	for _, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+		record["uuid"] = "line-" + strconv.Itoa(start)
+		if start > 0 {
+			record["parentUuid"] = "line-" + strconv.Itoa(start-1)
+		} else {
+			record["parentUuid"] = nil
+		}
+		result.WriteString(ClaudeProducerJSONL(mustMarshal(record), producer))
+		result.WriteByte('\n')
+		start++
+	}
+	return result.String()
+}
 
 // ClaudeProducerJSONL adds producer fields to each JSONL entry.
 func ClaudeProducerJSONL(content, producer string) string {

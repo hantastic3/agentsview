@@ -585,6 +585,55 @@ func TestIncrementalUpdateLeavesNonMatching(t *testing.T) {
 		"is_automated should stay 0 for non-matching first_message")
 }
 
+// TestIncrementalUpdateClearsTerminationStatus verifies that an
+// incremental sync resets termination_status to NULL. The classifier
+// needs the full message slice to reach the right verdict, and the
+// incremental path only sees the new tail. Leaving the previous
+// classification in place would surface stale "tool_call_pending"
+// or "awaiting_user" indicators in the UI for up to 15 minutes
+// after the user appended a resolving result or a new prompt.
+func TestIncrementalUpdateClearsTerminationStatus(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	insertSession(t, d, "stale-term", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		v := "tool_call_pending"
+		s.TerminationStatus = &v
+	})
+
+	pre, err := d.GetSession(ctx, "stale-term")
+	require.NoError(t, err, "get pre")
+	require.NotNil(t, pre.TerminationStatus,
+		"precondition: expected tool_call_pending")
+	require.Equal(t, "tool_call_pending", *pre.TerminationStatus,
+		"precondition: expected tool_call_pending")
+
+	err = callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"stale-term",
+		nil,
+		4,
+		2,
+		2048,
+		200,
+		0,
+		"",
+		0,
+		0,
+		false,
+		false,
+	)
+	require.NoError(t, err, "incremental update")
+
+	got, err := d.GetSession(ctx, "stale-term")
+	require.NoError(t, err, "get stale-term")
+	assert.Nil(t, got.TerminationStatus,
+		"termination_status should be NULL after incremental update")
+}
+
 func TestBackfillIsAutomatedBumpsLocalModifiedAt(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

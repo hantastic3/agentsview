@@ -327,11 +327,13 @@ func usageOnlyMessages(messages []Message) []Message {
 		message.HasThinking = false
 		message.HasToolUse = len(message.ToolCalls) > 0
 		message.ContentLength = 0
+		message.IsSystem = false
 		message.SourceType = ""
 		message.SourceSubtype = ""
 		message.PromptSource = ""
 		message.SourceParentUUID = ""
 		message.IsSidechain = false
+		message.IsCompactBoundary = false
 		stored = append(stored, message)
 	}
 	return stored
@@ -672,9 +674,10 @@ func compactCopiedSessionsForUsageTx(
 			SET content = '', thinking_text = '', has_thinking = 0,
 			    has_tool_use = EXISTS (SELECT 1 FROM tool_calls tc
 			                           WHERE tc.message_id = messages.id),
-			    content_length = 0,
+			    content_length = 0, is_system = 0,
 			    source_type = '', source_subtype = '', prompt_source = '',
-			    source_parent_uuid = '', is_sidechain = 0
+			    source_parent_uuid = '', is_sidechain = 0,
+			    is_compact_boundary = 0
 			WHERE session_id` + inCopied},
 		{"session titles", `
 			UPDATE sessions

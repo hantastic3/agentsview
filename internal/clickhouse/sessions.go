@@ -141,11 +141,9 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		if err != nil {
 			return db.SessionPage{}, err
 		}
-		if !f.SkipTotal {
-			total = cur.Total
-		}
+		total = cur.Total
 	}
-	if !f.SkipTotal && total <= 0 {
+	if total <= 0 {
 		if err := s.queryRowContext(ctx,
 			"SELECT toInt64(COUNT(*)) FROM sessions WHERE "+where, args...,
 		).Scan(&total); err != nil {

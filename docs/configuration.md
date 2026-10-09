@@ -246,8 +246,9 @@ Claude transcripts that record `turn_duration` trigger toasts after Stop hooks
 finish, with no background agents or workflows pending. Older and headless
 transcripts use the assistant's `end_turn` signal.
 
-Each session's first sighting stays silent, including restored sessions.
-Toasts require a later turn completion in a session the app has already seen.
+Each session's first sighting stays silent. Re-imported or restored sessions
+can toast if the watcher remembers an earlier turn. The app cannot distinguish
+a catch-up import from a later turn.
 
 The `cursor_secret` is generated automatically on first run. For Gist
 publishing, AgentsView first uses a saved `github_token`. For local browser

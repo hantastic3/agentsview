@@ -121,10 +121,6 @@ export type GetApiV1SessionsParams = {
    */
   each_row?: boolean;
   /**
-   * Skip counting matches and return total as zero; pagination is unchanged
-   */
-  skip_total?: boolean;
-  /**
    * Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
    */
   ids?: string;

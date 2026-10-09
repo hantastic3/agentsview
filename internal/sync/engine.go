@@ -19309,19 +19309,6 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		return nil
 	}
 
-	preserveTerminationStatus := true
-	for _, msg := range inc.msgs {
-		if !msg.IsSystem || len(msg.ToolResults) > 0 {
-			preserveTerminationStatus = false
-			break
-		}
-	}
-	for _, link := range inc.links {
-		if link.HasResult {
-			preserveTerminationStatus = false
-			break
-		}
-	}
 	dbMsgs := toDBMessages(
 		pendingWrite{
 			sess: parser.ParsedSession{ID: inc.sessionID, Agent: inc.agent},
@@ -19479,7 +19466,6 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		db.IncrementalSessionUpdate{
 			EndedAt:                  endedAt,
 			TerminationStatus:        inc.terminationStatus,
-			KeepTerminationStatus:    preserveTerminationStatus,
 			MsgCount:                 msgCount,
 			UserMsgCount:             userMsgCount,
 			FileSize:                 inc.fileSize,

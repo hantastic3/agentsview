@@ -398,11 +398,10 @@ func (p *claudeProvider) ParseIncremental(
 	if len(newMsgs) == 0 {
 		if consumed > 0 {
 			return IncrementalOutcome{
-				TerminationStatus: termination,
-				SessionID:         req.SessionID,
-				SubagentLinks:     links,
-				EndedAt:           endedAt,
-				ConsumedBytes:     consumed,
+				SessionID:     req.SessionID,
+				SubagentLinks: links,
+				EndedAt:       endedAt,
+				ConsumedBytes: consumed,
 			}, IncrementalApplied, nil
 		}
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
