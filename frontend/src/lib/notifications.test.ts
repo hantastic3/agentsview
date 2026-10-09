@@ -44,7 +44,7 @@ async function change(patch: Partial<DbSession> = {}) {
 }
 function assistantMessage(patch: Partial<DbMessage> = {}) {
   return {
-    id: 1,
+    id: (patch.ordinal ?? 2) + 1,
     ordinal: 2,
     role: "assistant",
     content: "Ready for review",
@@ -87,6 +87,49 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("desktop notification watcher", () => {
+  it("notifies once after rewind and resend preserves counts and assistant ordinal", async () => {
+    row.termination_status = "awaiting_user";
+    messages.mockResolvedValue({ messages: [assistantMessage({ id: 10, ordinal: 1 })], count: 1 });
+    await start();
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ id: 12, ordinal: 1, content: "Revised reply" })],
+      count: 1,
+    });
+    await change({ ended_at: "2026-10-07T12:00:02Z" });
+    expect(plugin.sendNotification).toHaveBeenCalledExactlyOnceWith({
+      title: "Fix login: turn finished",
+      body: "The agent finished this turn and is waiting for you.",
+    });
+    expect(messages).toHaveBeenCalledExactlyOnceWith(
+      { id: "session" },
+      { direction: "desc", limit: 2 },
+    );
+    await change();
+    await change({ ended_at: "2026-10-07T12:00:03Z" });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
+  it("deduplicates a replaced row by source UUID and detects a new reply at the same ordinal", async () => {
+    row.termination_status = "awaiting_user";
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ id: 10, ordinal: 1, source_uuid: "reply-a" })],
+      count: 1,
+    });
+    await start();
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ id: 12, ordinal: 1, source_uuid: "reply-a" })],
+      count: 1,
+    });
+    await change({ ended_at: "2026-10-07T12:00:02Z" });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    messages.mockResolvedValue({
+      messages: [assistantMessage({ id: 14, ordinal: 1, source_uuid: "reply-b" })],
+      count: 1,
+    });
+    await change({ ended_at: "2026-10-07T12:00:03Z" });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change({ ended_at: "2026-10-07T12:00:04Z" });
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
   it.each([
     { is_system: true },
     { is_compact_boundary: true },
@@ -161,7 +204,10 @@ describe("desktop notification watcher", () => {
       await change();
       await change({ ended_at: "2026-10-07T12:00:02Z" });
       expect(plugin.sendNotification).not.toHaveBeenCalled();
-      expect(messages).not.toHaveBeenCalled();
+      expect(messages).toHaveBeenCalledExactlyOnceWith(
+        { id: "session" },
+        { direction: "desc", limit: 2 },
+      );
       expect(list.mock.calls[0]![0]).toMatchObject({
         active_since: "2026-10-07T11:50:00.000Z",
         each_row: true,
@@ -445,26 +491,26 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it.each([{ termination_status: "" }, { user_message_count: 2 }, { message_count: 4 }])(
-    "retries a changed session after the message read: %j",
-    async (patch) => {
-      row.termination_status = "awaiting_user";
-      await start();
-      session.mockImplementationOnce(
-        async () =>
-          ({ ...row, ...patch }) as Awaited<
-            ReturnType<typeof SessionsService.getApiV1SessionsById>
-          >,
-      );
-      await change({ message_count: 3 });
-      expect(plugin.sendNotification).not.toHaveBeenCalled();
-      await change();
-      expect(messages).toHaveBeenCalledTimes(2);
-      expect(plugin.sendNotification).toHaveBeenCalledOnce();
-      await change();
-      expect(plugin.sendNotification).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([
+    { termination_status: "" },
+    { user_message_count: 2 },
+    { message_count: 4 },
+    { ended_at: "2026-10-07T12:00:02Z" },
+  ])("retries a changed session after the message read: %j", async (patch) => {
+    row.termination_status = "awaiting_user";
+    await start();
+    session.mockImplementationOnce(
+      async () =>
+        ({ ...row, ...patch }) as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>,
+    );
+    await change({ message_count: 3 });
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    await change();
+    expect(messages).toHaveBeenCalledTimes(2);
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    await change();
+    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+  });
   it("retries a failed session recheck without consuming the append", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     row.termination_status = "awaiting_user";

@@ -46,7 +46,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
       status?: string;
       user_message_count: number;
       message_count: number;
-      assistant_ordinal: number;
+      assistant_id?: string | number;
       activity: number;
     }
   >();
@@ -101,9 +101,10 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
           status: row.termination_status,
           user_message_count: row.user_message_count,
           message_count: row.message_count,
-          assistant_ordinal: previous?.assistant_ordinal ?? -1,
+          assistant_id: previous?.assistant_id,
           activity,
         };
+        const activityChanged = !!previous && previous.activity !== activity;
         let turnEnd =
           !!previous &&
           row.termination_status === "awaiting_user" &&
@@ -112,10 +113,12 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         try {
           if (
             row.termination_status === "awaiting_user" &&
-            (!previous || turnEnd || row.message_count > previous.message_count)
+            (!previous || turnEnd || activityChanged || row.message_count > previous.message_count)
           ) {
             let remaining =
-              !previous || turnEnd ? row.message_count : row.message_count - previous.message_count;
+              !previous || turnEnd || activityChanged
+                ? row.message_count
+                : row.message_count - previous.message_count;
             let from: number | undefined;
             while (remaining > 0 && !stopped) {
               const result = await SessionsService.getApiV1SessionsByIdMessages(
@@ -130,8 +133,9 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
                   message.role === "assistant",
               );
               if (assistant) {
-                turnEnd ||= !!previous && assistant.ordinal > previous.assistant_ordinal;
-                entry.assistant_ordinal = Math.max(entry.assistant_ordinal, assistant.ordinal);
+                const assistantId = assistant.source_uuid || assistant.id;
+                turnEnd ||= !!previous && assistantId !== previous.assistant_id;
+                entry.assistant_id = assistantId;
                 break;
               }
               remaining -= result.messages.length;
@@ -143,13 +147,14 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
             turnEnd ||
             (previous &&
               row.termination_status === "awaiting_user" &&
-              row.message_count > previous.message_count)
+              (activityChanged || row.message_count > previous.message_count))
           ) {
             const current = await SessionsService.getApiV1SessionsById({ id: row.id });
             if (
               current.termination_status !== "awaiting_user" ||
               current.user_message_count !== row.user_message_count ||
-              current.message_count !== row.message_count
+              current.message_count !== row.message_count ||
+              current.ended_at !== row.ended_at
             )
               continue;
             if (turnEnd) send(current);
