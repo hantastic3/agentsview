@@ -28,6 +28,11 @@ func TestClaudeTurnDuration(t *testing.T) {
 	const taskInitial = `{"type":"user","uuid":"u0","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n"
 	const taskNotification = `{"type":"user","uuid":"n0","parentUuid":"a0","message":{"content":"<task-notification>agent finished</task-notification>"}}` + "\n"
 	const taskDuration = `{"type":"system","subtype":"turn_duration","parentUuid":"n0"}` + "\n"
+	const toolInitial = `{"type":"user","uuid":"u0","timestamp":"2024-01-01T10:00:00Z","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"tool-a","name":"Read","input":{}}],"stop_reason":"tool_use"}}` + "\n"
+	const toolResult = `{"type":"user","uuid":"r0","parentUuid":"u1","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n"
+	const prompt = `{"type":"user","uuid":"u1","parentUuid":"a0","timestamp":"2024-01-01T10:00:02Z","message":{"content":"continue"}}` + "\n"
+	const toolDuration = `{"type":"system","subtype":"turn_duration","parentUuid":"r0"}` + "\n"
+	const toolAnswer = `{"type":"assistant","uuid":"a1","parentUuid":"r0","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}` + "\n" + `{"type":"system","subtype":"turn_duration","parentUuid":"a1"}` + "\n"
 	answer := testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n"
 	initial := testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly), testjsonl.ClaudeAssistantJSON("ready", tsEarlyS1, "end_turn")) + duration + testjsonl.ClaudeUserJSON("continue", tsEarlyS2) + "\n"
 	for _, tc := range []struct {
@@ -38,6 +43,30 @@ func TestClaudeTurnDuration(t *testing.T) {
 		want        []TerminationStatus
 		fullParseAt int
 	}{
+		{
+			name: "duration after prompt hidden by appended tool result", fullParseAt: 1,
+			initial: toolInitial + prompt,
+			tails:   []string{toolResult + toolDuration, toolAnswer},
+			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "duration after prompt hidden by stored tool result", fullParseAt: 1,
+			initial: toolInitial + prompt + toolResult,
+			tails:   []string{toolDuration, toolAnswer},
+			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "duration after queued prompt hidden by appended tool result", fullParseAt: 1,
+			initial: toolInitial + testjsonl.ClaudeQueuedCommandJSON("continue", tsEarlyS2) + "\n",
+			tails:   []string{`{"type":"user","uuid":"r0","parentUuid":"a0","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n" + toolDuration, toolAnswer},
+			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
+		{
+			name: "duration after queued prompt hidden by stored tool result", fullParseAt: 1,
+			initial: toolInitial + testjsonl.ClaudeQueuedCommandJSON("continue", tsEarlyS2) + "\n" + `{"type":"user","uuid":"r0","parentUuid":"a0","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-a","content":"file contents"}]}}` + "\n",
+			tails:   []string{toolDuration, toolAnswer},
+			want:    []TerminationStatus{TerminationClean, TerminationAwaitingUser},
+		},
 		{
 			name: "duration after stored queued prompt", fullParseAt: 1,
 			initial: `{"type":"user","uuid":"u0","timestamp":"2024-01-01T10:00:00Z","message":{"content":"hello"}}` + "\n" + `{"type":"assistant","uuid":"a0","parentUuid":"u0","timestamp":"2024-01-01T10:00:01Z","message":{"content":"ready","stop_reason":"end_turn"}}` + "\n" + testjsonl.ClaudeQueuedCommandJSON("continue", tsEarlyS2) + "\n",

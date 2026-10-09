@@ -812,12 +812,19 @@ func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, dur
 	if status == TerminationTruncated {
 		return status
 	}
+	// Tool-result carriers can follow a prompt without answering it.
+	for _, msg := range slices.Backward(messages) {
+		if msg.IsSystem || len(msg.ToolResults) > 0 {
+			continue
+		}
+		if msg.Role == RoleUser {
+			return status
+		}
+		break
+	}
 	for _, msg := range slices.Backward(messages) {
 		if msg.IsSystem {
 			continue
-		}
-		if msg.Role == RoleUser && len(msg.ToolResults) == 0 {
-			return status
 		}
 		for _, entry := range slices.Backward(entries) {
 			if entry.uuid == msg.SourceUUID {
@@ -861,6 +868,7 @@ func claudeStoredTailNeedsFullParse(path string, offset int64, lastEntryUUID str
 	}
 	defer f.Close()
 	reader := claudeBackwardReader{f: f, pos: offset}
+	checkedTail := false
 	for {
 		line, _, ok, err := reader.prev()
 		if err != nil || !ok {
@@ -878,10 +886,14 @@ func claudeStoredTailNeedsFullParse(path string, offset int64, lastEntryUUID str
 		msgs, _, _ := extractMessagesFrom([]dagEntry{{entryType: entryType, line: string(line)}}, 0)
 		for _, msg := range slices.Backward(msgs) {
 			if !msg.IsSystem {
-				if lastEntryUUID != "" && gjson.GetBytes(line, "uuid").Str != lastEntryUUID {
+				if !checkedTail && lastEntryUUID != "" && gjson.GetBytes(line, "uuid").Str != lastEntryUUID {
 					return true
 				}
-				return msg.Role == RoleUser && len(msg.ToolResults) == 0
+				checkedTail = true
+				if len(msg.ToolResults) > 0 {
+					continue
+				}
+				return msg.Role == RoleUser
 			}
 		}
 	}
@@ -1214,6 +1226,13 @@ func claudeParseSessionFrom(
 		}
 	}
 	if turnDuration.line != "" {
+		// Result-only tails need the stored prompt to classify completion.
+		if slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem && len(msg.ToolResults) > 0 }) &&
+			!slices.ContainsFunc(msgs, func(msg ParsedMessage) bool {
+				return !msg.IsSystem && (msg.Role == RoleAssistant || len(msg.ToolResults) == 0)
+			}) {
+			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		}
 		// Promoted user records need the full parser to resolve duration ownership.
 		if slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return msg.IsSystem && msg.Role == RoleUser }) {
 			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
