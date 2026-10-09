@@ -804,7 +804,7 @@
     }
   });
 
-  const notificationsEnabled = $derived(sync.isDesktop && settings.notifications.enabled);
+  const notificationsEnabled = $derived(sync.isDesktop && !settings.readOnly && settings.notifications.enabled);
   $effect(() => {
     if (notificationsEnabled) {
       return startNotificationWatcher(

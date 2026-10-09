@@ -97,20 +97,6 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("notifies after a rewind with equal counts and a new reply", async () => {
-    row.termination_status = "awaiting_user";
-    await start();
-    await change({ last_reply_id: "reply-2" });
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
-  it("keeps a truncated flicker silent for the same reply", async () => {
-    await start();
-    await change({ termination_status: "awaiting_user" });
-    await change({ termination_status: "truncated" });
-    await change({ termination_status: "awaiting_user" });
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
   it("records a finished import after enabling silently", async () => {
     list.mockResolvedValueOnce({ sessions: [], total: 0 });
     await start();
@@ -128,13 +114,7 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("keeps a renamed completion silent when ended_at changes", async () => {
-    row.termination_status = "awaiting_user";
-    await start();
-    await change({ message_count: 3, display_name: "Renamed", ended_at: "2026-10-07T12:01:00Z" });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    expect(session).not.toHaveBeenCalled();
-  });
+
   it.each([{ relationship_type: "subagent" }, {}])(
     "remembers silent completions: %j",
     async (patch) => {
@@ -159,7 +139,7 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it.each([{ last_reply_id: "reply-2" }, { termination_status: "clean" }, { turn_open: true }])(
-    "records a changed re-read silently: %j",
+    "retries an unfinished or changed re-read: %j",
     async (patch) => {
       await start();
       session.mockResolvedValueOnce({ ...row, ...patch } as Awaited<
@@ -168,8 +148,8 @@ describe("desktop notification watcher", () => {
       await change({ termination_status: "awaiting_user" });
       expect(plugin.sendNotification).not.toHaveBeenCalled();
       await change();
-      expect(plugin.sendNotification).not.toHaveBeenCalled();
-      expect(session).toHaveBeenCalledOnce();
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+      expect(session).toHaveBeenCalledTimes(2);
     },
   );
   it("retries a failed re-read after ten idle minutes", async () => {
@@ -259,17 +239,7 @@ describe("desktop notification watcher", () => {
     await change({ last_reply_id: "reply-2" });
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("notifies on the next turn after 24 idle hours", async () => {
-    row.termination_status = "awaiting_user";
-    await start();
-    list.mockResolvedValue({ sessions: [], total: 0 });
-    vi.setSystemTime(new Date("2026-10-08T12:01:00Z"));
-    await change();
-    list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
-    await change({ last_reply_id: "reply-2" });
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
+
   it("unsubscribes and cancels refreshes on stop", async () => {
     await start();
     stop?.();

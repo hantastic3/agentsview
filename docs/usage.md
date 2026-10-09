@@ -1296,6 +1296,9 @@ load; a saved language preference takes precedence.
 
 ![Settings with Spanish selected](/docs/assets/generated/screenshots/settings-spanish.png)
 
+Desktop notifications run only against writable SQLite servers. Read-only
+PostgreSQL, DuckDB and ClickHouse servers keep the watcher off.
+
 Desktop notifications alert you when the turn really ends and the agent waits
 for you, including forks and continuations. Each session's first sighting stays
 silent, even if a turn has already finished. Only later changes can toast.

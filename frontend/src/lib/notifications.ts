@@ -98,8 +98,10 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         try {
           const current = await SessionsService.getApiV1SessionsById({ id: row.id });
           if (stopped) return;
-          if (finished(current) && current.last_reply_id === row.last_reply_id) send(current);
-          previous.replyId = row.last_reply_id;
+          if (finished(current) && current.last_reply_id === row.last_reply_id) {
+            send(current);
+            previous.replyId = row.last_reply_id;
+          }
         } catch (err) {
           readsSucceeded = false;
           console.warn("notification turn-end read failed", err);
