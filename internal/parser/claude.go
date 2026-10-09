@@ -796,18 +796,8 @@ func claudeAnsweredUUIDs(results []ParseResult) map[string]bool {
 
 func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, durations []claudeTurnDuration, answered map[string]bool, truncated bool) TerminationStatus {
 	status := Classify(messages, lastAssistantStopReason(messages), truncated)
-	if status == TerminationTruncated {
+	if status != TerminationAwaitingUser {
 		return status
-	}
-	// Tool-result carriers can follow a prompt without answering it.
-	for _, msg := range slices.Backward(messages) {
-		if msg.IsSystem || len(msg.ToolResults) > 0 {
-			continue
-		}
-		if msg.Role == RoleUser {
-			return status
-		}
-		break
 	}
 	for _, msg := range slices.Backward(messages) {
 		if msg.IsSystem {
@@ -838,10 +828,7 @@ func classifyClaudeTermination(messages []ParsedMessage, entries []dagEntry, dur
 					break
 				}
 			}
-			if status == TerminationAwaitingUser {
-				return TerminationClean
-			}
-			return status
+			return ""
 		}
 		return status
 	}
@@ -890,10 +877,12 @@ type claudeStoredIdentity struct {
 // claudeIncrementalScan carries the per-session stored state an
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
-	termination   **TerminationStatus
-	startOrdinal  int
-	lastEntryUUID string
-	stored        claudeStoredIdentity
+	termination            **TerminationStatus
+	storedStatus           TerminationStatus
+	storedUserMessageCount int
+	startOrdinal           int
+	lastEntryUUID          string
+	stored                 claudeStoredIdentity
 	// storedLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing (multi-root or unresolvable-parent DAG).
@@ -944,7 +933,7 @@ func claudeParseSessionFrom(
 		appendedCustomTitle    string
 	)
 
-	processLine := func(line string) {
+	consumed, truncated, err := readJSONLFrom(path, offset, func(line string) {
 		line = resolveClaudePersistedToolResults(path, line)
 		if ts := extractTimestamp(line); !ts.IsZero() {
 			if ts.After(latestTS) {
@@ -968,7 +957,9 @@ func claudeParseSessionFrom(
 			return
 		}
 		if entryType == "system" {
-			durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
+			if claudeWritesTurnDuration(line) {
+				durations = collectClaudeTurnDuration(durations, []byte(line), lineIndex)
+			}
 			if _, ok := extractRenameName(
 				gjson.Get(line, "content").Str,
 			); ok {
@@ -1030,38 +1021,10 @@ func claudeParseSessionFrom(
 			timestamp:  ts,
 		})
 		lineIndex++
-	}
-	f, err := os.Open(path)
+	})
 	if err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
-	defer f.Close()
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, nil, time.Time{}, 0, err
-	}
-	lr := newLineReader(f, maxLineSize)
-	defer releaseLineReader(lr)
-	var consumed int64
-	var lastLineHasData, lastLineValid bool
-	for {
-		line, ok := lr.next()
-		if !ok {
-			break
-		}
-		lastLineHasData = strings.TrimSpace(line) != ""
-		lastLineValid = gjson.Valid(line)
-		if lastLineValid {
-			processLine(line)
-			consumed = lr.bytesRead
-		}
-	}
-	if err := lr.Err(); err != nil {
-		return nil, nil, time.Time{}, 0, fmt.Errorf(
-			"reading claude %s from offset %d: %w",
-			path, offset, err,
-		)
-	}
-	isTruncated := lastLineHasData && !lastLineValid && !fileEndsWithNewline(f, offset+lr.bytesRead)
 
 	// Merge same-message.id streaming runs exactly as the full parser
 	// does before any DAG work. Merging swallows chunk uuids, which
@@ -1112,11 +1075,6 @@ func claudeParseSessionFrom(
 	if needsClaudeFullParseForWebSearchCounts(entries) {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
-
-	if len(entries) == 0 && len(queuedCommands) == 0 && len(durations) == 0 {
-		return nil, links, latestTS, consumed, nil
-	}
-
 	// Fork detection only matters when the full parser would actually
 	// walk the DAG. parseLinear-bound files — multi-root or with
 	// unresolvable parents, which is every real CLI transcript whose
@@ -1186,20 +1144,22 @@ func claudeParseSessionFrom(
 	if latestTS.After(endedAt) {
 		endedAt = latestTS
 	}
-	anchored := false
-	for _, msg := range slices.Backward(msgs) {
-		if msg.IsSystem || len(msg.ToolResults) > 0 {
-			continue
-		}
-		anchored = true
-		if scan.termination != nil && !isTruncated {
-			answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
-			*scan.termination = new(classifyClaudeTermination(msgs, entries, durations, answered, false))
-		}
-		break
-	}
-	if !anchored && len(durations) > 0 {
+	status := scan.storedStatus
+	if truncated {
+		status = TerminationTruncated
+	} else if slices.ContainsFunc(msgs, func(msg ParsedMessage) bool { return !msg.IsSystem || len(msg.ToolResults) > 0 }) {
+		answered := claudeAnsweredUUIDs([]ParseResult{{Messages: msgs}})
+		status = classifyClaudeTermination(msgs, entries, durations, answered, false)
+	} else if status == TerminationTruncated {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	} else if status == "" && scan.storedUserMessageCount > 0 && len(durations) > 0 {
+		last := durations[len(durations)-1]
+		if last.pending == 0 && last.workflows == 0 {
+			status = TerminationAwaitingUser
+		}
+	}
+	if scan.termination != nil {
+		*scan.termination = new(status)
 	}
 
 	return msgs, links, endedAt, consumed, nil

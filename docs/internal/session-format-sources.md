@@ -184,14 +184,13 @@ fixtures retain this field; missing identities remain source-local.
   `insertMessageChain` preserves them, chaining through system and attachment
   records. Public producer source is unavailable; evidence comes from the
   installed bundles and transcripts.
-  Full and incremental parsing use line order. The last duration after the
-  last visible message, before the next branch's visible message, decides.
-  An unanswered prompt and truncation retain precedence. Duration tails without
-  a reply or prompt require full parsing. Older, headless, sidechain and
-  unversioned records retain `end_turn`. Reverified with UUID-chained parser
-  fixtures, filtered metadata and attachments, every append boundary and sync.
-  Reverified with incremental termination fixtures that an incomplete final
-  record returns no incremental verdict, including after a completion marker.
+  A duration only confirms an `end_turn` reply; streaming replies and tool calls
+  keep their base verdicts. Full and incremental parsing use line order, bounded
+  by the next branch's visible message. Message-free tails carry the stored
+  verdict; a zero-count duration settles a stored unfinished reply without a
+  full parse. Truncation takes precedence. Older, headless, sidechain and
+  unversioned records retain `end_turn`. Reverified with UUID-chained fixtures,
+  filtered metadata, every append boundary, streaming replies and incremental sync.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.

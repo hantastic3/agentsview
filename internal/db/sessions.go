@@ -2823,6 +2823,7 @@ type IncrementalInfo struct {
 	AgentLabel           string
 	Entrypoint           string
 	SessionKind          string
+	TerminationStatus    string
 	FileSize             int64
 	FileMtime            int64
 	NextOrdinal          int
@@ -2944,7 +2945,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 	var linearParse sql.NullBool
 	err = db.getReader().QueryRow(ctx,
 		`SELECT s.id, s.project, COALESCE(snap.project, ''),
-			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind,
+			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind, COALESCE(s.termination_status, ''),
 			file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device,
@@ -2975,7 +2976,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 	).Scan(
 		&info.ID, &info.Project, &info.SourceProject,
 		&info.Machine, &info.Cwd,
-		&info.AgentLabel, &info.Entrypoint, &info.SessionKind,
+		&info.AgentLabel, &info.Entrypoint, &info.SessionKind, &info.TerminationStatus,
 		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse,
 		&fi, &fd,
 		&info.MsgCount, &info.UserMsgCount,
@@ -3057,7 +3058,7 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 // is_automated=0 indefinitely (UpsertSession sets the flag once
 // at insert; the incremental path never re-evaluates it).
 //
-// A non-nil termination_status stores the incremental verdict; nil clears a stale verdict when the tail cannot establish termination.
+// A non-nil termination_status stores the provider verdict; nil clears it.
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {

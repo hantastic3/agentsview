@@ -1038,16 +1038,24 @@ func claudeProviderFixture(firstMessage string) string {
 
 func TestClaudeProviderIncrementalTermination(t *testing.T) {
 	const completedTurn = `{"type":"assistant","uuid":"reply","entrypoint":"cli","version":"2.1.295","timestamp":"2024-01-01T10:00:02Z","message":{"content":"done","stop_reason":"end_turn"}}
-{"type":"system","subtype":"turn_duration","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}
+{"type":"system","subtype":"turn_duration","entrypoint":"cli","version":"2.1.295","timestamp":"2024-01-01T10:00:03Z","durationMs":1000}
 `
 	for _, tc := range []struct {
 		name, tail string
+		stored     string
+		userCount  int
+		fullParse  bool
 		want       *TerminationStatus
 	}{
+		{name: "metadata preserves waiting", tail: `{"type":"queue-operation","operation":"dequeue"}` + "\n", stored: "awaiting_user", want: new(TerminationAwaitingUser)},
+		{name: "truncated message-free tail", tail: `{"type":"user"`, stored: "awaiting_user", want: new(TerminationTruncated)},
+		{name: "stored truncation needs context", tail: `{"type":"queue-operation","operation":"dequeue"}` + "\n", stored: "truncated", fullParse: true},
+		{name: "duration without user", tail: `{"type":"system","subtype":"turn_duration","entrypoint":"cli","version":"2.1.295"}` + "\n", want: new(TerminationStatus(""))},
+		{name: "unsupported duration", tail: `{"type":"system","subtype":"turn_duration","entrypoint":"sdk-cli","version":"2.1.295"}` + "\n", userCount: 1, want: new(TerminationStatus(""))},
 		{name: "user only", tail: testjsonl.ClaudeUserJSON("follow up", tsLate) + "\n", want: new(TerminationClean)},
-		{name: "incomplete tail", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"`, want: nil},
+		{name: "incomplete tail", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"`, want: new(TerminationTruncated)},
 		{name: "completed turn", tail: completedTurn, want: new(TerminationAwaitingUser)},
-		{name: "completion before incomplete tail", tail: completedTurn + `{"type":"user"`, want: nil},
+		{name: "completion before incomplete tail", tail: completedTurn + `{"type":"user"`, want: new(TerminationTruncated)},
 		{name: "malformed complete line", tail: testjsonl.ClaudeAssistantJSON("done", "2024-01-01T10:00:02Z", "end_turn") + "\n" + `{"type":"user"` + "\n", want: new(TerminationAwaitingUser)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1063,12 +1071,17 @@ func TestClaudeProviderIncrementalTermination(t *testing.T) {
 			outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
 				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: int64(len(initial + tc.tail))},
 				SessionID: "session", Offset: int64(len(initial)), StartOrdinal: 1,
-				StoredEntrypoint: "cli",
+				StoredEntrypoint: "cli", StoredTerminationStatus: tc.stored, StoredUserMessageCount: tc.userCount,
 			})
 			require.NoError(t, err)
+			if tc.fullParse {
+				require.Equal(t, IncrementalNeedsFullParse, status)
+				assert.True(t, outcome.ForceReplace)
+				return
+			}
 			require.Equal(t, IncrementalApplied, status)
 			assert.Equal(t, tc.want, outcome.TerminationStatus)
-			if tc.want == nil {
+			if *tc.want == TerminationTruncated {
 				full, _, err := claudeParseFile(path, "demo", "test", claudeParseOptions{})
 				require.NoError(t, err)
 				require.Len(t, full, 1)

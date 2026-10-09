@@ -2732,7 +2732,10 @@ func (p *codexProvider) parseSessionFrom(ctx context.Context,
 		offset,
 		startOrdinal,
 		includeExec,
-		readJSONLFrom,
+		func(path string, offset int64, fn func(string)) (int64, error) {
+			consumed, _, err := readJSONLFrom(path, offset, fn)
+			return consumed, err
+		},
 	)
 	if err != nil {
 		return nil, time.Time{}, 0, err

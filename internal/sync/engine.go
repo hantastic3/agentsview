@@ -15874,6 +15874,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
 				StoredSessionName:         storedSessionName,
+				StoredTerminationStatus:   inc.TerminationStatus,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
 			},
 		)
@@ -15898,7 +15899,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
 			var terminationStatus *string
-			if outcome.TerminationStatus != nil {
+			if outcome.TerminationStatus != nil && *outcome.TerminationStatus != "" {
 				status := string(*outcome.TerminationStatus)
 				terminationStatus = &status
 			}
@@ -16242,7 +16243,7 @@ func (e *Engine) tryIncrementalJSONL(
 		// so they aren't re-read on every sync. Carry
 		// endedAt forward so session bounds stay current
 		// with non-message timestamps (e.g. progress).
-		if consumed > 0 {
+		if consumed > 0 || terminationStatus != nil && *terminationStatus != inc.TerminationStatus {
 			return processResult{
 				sourceBytes: sourceBytes,
 				incremental: &incrementalUpdate{
