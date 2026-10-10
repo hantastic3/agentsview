@@ -18391,10 +18391,16 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 
 func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		lines []string
-		open  []bool
+		name   string
+		lines  []string
+		open   []bool
+		legacy bool
 	}{
+		{name: "upgrade during background work", legacy: true, lines: []string{
+			`{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}`,
+			`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`,
+			`{"type":"system","subtype":"turn_duration"}`,
+		}, open: []bool{true, true, false}},
 		{name: "queued prompt during tools", lines: []string{
 			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
 			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
@@ -18426,6 +18432,13 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 			path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
 			env.engine.SyncAll(t.Context(), nil)
 			for i, line := range tc.lines {
+				if tc.legacy && i == len(tc.lines)-1 {
+					session, err := env.db.GetSessionFull(t.Context(), "notify")
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					session.TerminationStatus = nil
+					require.NoError(t, env.db.UpsertSession(t.Context(), *session))
+				}
 				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 				require.NoError(t, err)
 				_, err = f.WriteString(testjsonl.ClaudeChainJSONL(t, line+"\n", producer, i+1))

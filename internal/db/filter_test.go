@@ -261,11 +261,23 @@ func TestSessionFilterEachRowActiveSince(t *testing.T) {
 		require.NotEmpty(t, original)
 		var rowID int64
 		require.NoError(t, d.Reader().QueryRow(t.Context(), "SELECT id FROM messages WHERE session_id = 'codex'").Scan(&rowID))
+		insertSession(t, d, "other", "proj")
+		insertMessages(t, d, userMsg("other", 0, "hello"))
+		insertMessages(t, d, Message{SessionID: "codex", Ordinal: 1, Role: "assistant", IsSystem: true, Content: "summary"})
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", messages))
+		var reparsedID int64
+		require.NoError(t, d.Reader().QueryRow(t.Context(), "SELECT id FROM messages WHERE session_id = 'codex'").Scan(&reparsedID))
+		assert.NotEqual(t, rowID, reparsedID, "a full reparse can change the row ID")
+		filter.Agent = "codex"
+		page, err = d.ListSessions(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, original, page.Sessions[0].LastReplyID, "unchanged replies retain identity across full reparses")
 		messages[0].Content = "more"
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", messages))
 		var rewrittenID int64
 		require.NoError(t, d.Reader().QueryRow(t.Context(), "SELECT id FROM messages WHERE session_id = 'codex'").Scan(&rewrittenID))
-		assert.Equal(t, rowID, rewrittenID, "a rewritten reply can retain its row ID")
+		assert.Equal(t, reparsedID, rewrittenID, "a rewritten reply can retain its row ID")
 		page, err = d.ListSessions(t.Context(), filter)
 		require.NoError(t, err)
 		require.Len(t, page.Sessions, 1)

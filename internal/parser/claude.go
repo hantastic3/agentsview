@@ -196,13 +196,13 @@ func claudeParseFile(
 		}
 
 		entryType := gjson.GetBytes(lineBytes, "type").Str
-		turnOpen = foldClaudeTurnOpen(turnOpen, string(lineBytes))
-		if entryType == "user" || gjson.GetBytes(lineBytes, "isCompactSummary").Bool() || gjson.GetBytes(lineBytes, "isMeta").Bool() {
+		turnOpen = foldClaudeTurnOpen(turnOpen, lineBytes, entryType)
+		if entryType == "user" || entryType == "assistant" && (gjson.GetBytes(lineBytes, "isCompactSummary").Bool() || gjson.GetBytes(lineBytes, "isMeta").Bool()) {
 			if parent, ok := turnStates[gjson.GetBytes(lineBytes, "parentUuid").Str]; ok {
 				branchTurnOpen = parent
 			}
 		}
-		state := foldClaudeTurnOpen(branchTurnOpen, string(lineBytes))
+		state := foldClaudeTurnOpen(branchTurnOpen, lineBytes, entryType)
 		if entryType == "system" && branchTurnOpen != nil && state != nil {
 			*branchTurnOpen = *state
 		} else {
@@ -764,22 +764,22 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 	return ""
 }
 
-func claudeWritesTurnDuration(line string) bool {
-	return gjson.Get(line, "entrypoint").Str == "cli" &&
-		semver.Compare("v"+gjson.Get(line, "version").Str, "v2.1.259") >= 0
+func claudeWritesTurnDuration(line []byte) bool {
+	return gjson.GetBytes(line, "entrypoint").Str == "cli" &&
+		semver.Compare("v"+gjson.GetBytes(line, "version").Str, "v2.1.259") >= 0
 }
 
 // shortcut: deferred swarm durations have no turn owner, so they can close a later turn until the producer adds an ID.
-func foldClaudeTurnOpen(open *bool, line string) *bool {
-	switch gjson.Get(line, "type").Str {
+func foldClaudeTurnOpen(open *bool, line []byte, entryType string) *bool {
+	switch entryType {
 	case "assistant":
-		if !gjson.Get(line, "isSidechain").Bool() && !gjson.Get(line, "isCompactSummary").Bool() && !gjson.Get(line, "isMeta").Bool() {
+		if !gjson.GetBytes(line, "isSidechain").Bool() && !gjson.GetBytes(line, "isCompactSummary").Bool() && !gjson.GetBytes(line, "isMeta").Bool() {
 			return new(claudeWritesTurnDuration(line))
 		}
 	case "system":
-		if gjson.Get(line, "subtype").Str == "turn_duration" {
-			return new(claudePendingCount(gjson.Get(line, "pendingBackgroundAgentCount")) != 0 ||
-				claudePendingCount(gjson.Get(line, "pendingWorkflowCount")) != 0)
+		if gjson.GetBytes(line, "subtype").Str == "turn_duration" {
+			return new(claudePendingCount(gjson.GetBytes(line, "pendingBackgroundAgentCount")) != 0 ||
+				claudePendingCount(gjson.GetBytes(line, "pendingWorkflowCount")) != 0)
 		}
 	}
 	return open
@@ -899,11 +899,12 @@ func claudeParseSessionFrom(
 	}
 	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
+			entryType := gjson.Get(line, "type").Str
 			if scan.turnOpen != nil {
-				*scan.turnOpen = foldClaudeTurnOpen(*scan.turnOpen, line)
+				*scan.turnOpen = foldClaudeTurnOpen(*scan.turnOpen, []byte(line), entryType)
 			}
 			line = resolveClaudePersistedToolResults(path, line)
-			if scan.termination != nil {
+			if scan.termination != nil && (entryType == "user" || entryType == "assistant" || entryType == "attachment" && gjson.Get(line, "attachment.type").Str == "queued_command") {
 				verdictLines = append(verdictLines, line)
 			}
 			if ts := extractTimestamp(line); !ts.IsZero() {
@@ -911,7 +912,6 @@ func claudeParseSessionFrom(
 					latestTS = ts
 				}
 			}
-			entryType := gjson.Get(line, "type").Str
 			if claudeSessionIdentityUpdate(line, stored) {
 				sawSessionIdentityEdit = true
 			}
@@ -1135,7 +1135,7 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 	if scan.termination == nil {
 		return nil
 	}
-	if len(entries) == 0 && len(msgs) == 0 && scan.storedTermination != nil {
+	if len(entries) == 0 && len(msgs) == 0 && scan.storedTermination != nil && *scan.storedTermination != "" {
 		*scan.termination = scan.storedTermination
 		return nil
 	}
@@ -1165,10 +1165,13 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 			line = []byte(tail[len(tail)-1])
 			tail = tail[:len(tail)-1]
 		}
-		if !gjson.ValidBytes(line) {
+		if fromPrefix && !gjson.ValidBytes(line) {
 			continue
 		}
 		typ := gjson.GetBytes(line, "type").Str
+		if typ != "user" && typ != "assistant" && (typ != "attachment" || gjson.GetBytes(line, "attachment.type").Str != "queued_command") {
+			continue
+		}
 		resolved := string(line)
 		if fromPrefix {
 			resolved = resolveClaudePersistedToolResults(path, resolved)

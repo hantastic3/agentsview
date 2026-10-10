@@ -73,7 +73,7 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         if (!previous) {
           previous = {
             replyId:
-              Date.parse(row.started_at || "") >= startedAt || !finished(row)
+              Date.parse(row.ended_at || "") >= startedAt || !finished(row)
                 ? undefined
                 : row.last_reply_id,
           };

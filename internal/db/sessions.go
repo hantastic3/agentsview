@@ -43,14 +43,14 @@ const legacyDeletionCauseSourceMissing = "source_missing"
 // it into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
-const sessionReplyIDCol = `COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), 'row:' || json_array(id, timestamp, content)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id`
+const sessionReplyIDCol = `COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), 'row:' || json_array(ordinal, timestamp, content)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id`
 
 const sessionReplyCols = `'' AS last_reply_id,
 	CASE WHEN agent = 'claude' THEN COALESCE(turn_open, 1) ELSE 0 END`
 
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
-const sessionBaseCols = `id, project, machine, agent,
+const sessionCoreCols = `id, project, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
@@ -81,8 +81,16 @@ const sessionBaseCols = `id, project, machine, agent,
 	EXISTS (
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
-	) AS project_assigned,
-	` + sessionReplyCols
+	) AS project_assigned`
+
+const sessionBaseCols = sessionCoreCols + ", " + sessionReplyCols
+
+func sessionColumns(includeLastReplyID bool) string {
+	if includeLastReplyID {
+		return sessionCoreCols + ", " + sessionReplyIDCol + ", CASE WHEN agent = 'claude' THEN COALESCE(turn_open, 1) ELSE 0 END"
+	}
+	return sessionBaseCols
+}
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -749,10 +757,7 @@ func (db *DB) ListSessions(
 		)
 	}
 
-	columns := sessionBaseCols
-	if f.EachRow {
-		columns = strings.Replace(columns, "'' AS last_reply_id", sessionReplyIDCol, 1)
-	}
+	columns := sessionColumns(f.EachRow)
 	if f.IncludeSource {
 		columns += ", file_path, file_size, local_modified_at"
 	}
@@ -774,7 +779,7 @@ func (db *DB) ListSessions(
 		return SessionPage{}, err
 	}
 	for i := range sessions {
-		// Row IDs can survive edits, so UUID-less replies also need a content fingerprint.
+		// UUID-less replies retain identity across reparses and change when their content changes.
 		if strings.HasPrefix(sessions[i].LastReplyID, "row:") {
 			sessions[i].LastReplyID = fmt.Sprintf("row:%x", sha256.Sum256([]byte(sessions[i].LastReplyID)))
 		}

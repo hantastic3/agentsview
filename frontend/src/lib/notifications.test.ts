@@ -65,16 +65,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("desktop notification watcher", () => {
-  it.each(["2026-10-07T12:00:00Z", "2026-10-07T12:00:01Z"])(
-    "toasts a quick first turn started at %s once",
+  it.each(["2026-10-07T11:00:00Z", "2026-10-07T12:00:00Z", "2026-10-07T12:00:01Z"])(
+    "toasts a newly completed turn in a session started at %s once",
     async (started_at) => {
       list.mockResolvedValueOnce({ sessions: [], total: 0 });
       await start();
-      await change({ started_at, termination_status: "awaiting_user" });
+      row = {
+        ...row,
+        started_at,
+        ended_at: "2026-10-07T12:01:00Z",
+        termination_status: "awaiting_user",
+      };
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await flush();
       await change();
       expect(plugin.sendNotification).toHaveBeenCalledOnce();
       stop?.();
-      vi.setSystemTime(new Date("2026-10-07T12:01:00Z"));
+      vi.setSystemTime(new Date("2026-10-07T12:06:00Z"));
       await start();
       expect(plugin.sendNotification).toHaveBeenCalledOnce();
     },
@@ -87,6 +94,7 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("records a waiting baseline silently", async () => {
+    row.ended_at = "2026-10-07T11:59:59Z";
     row.termination_status = "awaiting_user";
     await start();
     await change();
@@ -114,21 +122,25 @@ describe("desktop notification watcher", () => {
     await change({
       created_at: "2026-10-07T12:01:00Z",
       started_at: "2026-10-07T11:00:00Z",
+      ended_at: "2026-10-07T11:59:59Z",
       termination_status: "awaiting_user",
     });
     await change();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
-  it("notifies only after pending work closes", async () => {
-    row.termination_status = "awaiting_user";
-    row.turn_open = true;
-    await start();
-    await change();
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-    await change({ turn_open: false });
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
+  it.each([undefined, "awaiting_user"])(
+    "notifies only after pending work closes with saved status %s",
+    async (termination_status) => {
+      row.termination_status = termination_status;
+      row.turn_open = true;
+      await start();
+      await change();
+      expect(plugin.sendNotification).not.toHaveBeenCalled();
+      await change({ turn_open: false, termination_status: "awaiting_user" });
+      await change();
+      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([{ relationship_type: "subagent" }, {}])(
     "remembers silent completions: %j",
@@ -199,6 +211,7 @@ describe("desktop notification watcher", () => {
     expect(plugin.sendNotification).toHaveBeenCalledTimes(2);
   });
   it("remembers re-entry after ten idle minutes", async () => {
+    row.ended_at = "2026-10-07T11:59:59Z";
     row.termination_status = "awaiting_user";
     await start();
     list.mockResolvedValue({ sessions: [], total: 0 });
