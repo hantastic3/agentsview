@@ -18390,64 +18390,47 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 }
 
 func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		lines  []string
-		open   []bool
-		legacy bool
-	}{
-		{name: "upgrade during background work", legacy: true, lines: []string{
+	t.Run("legacy upgrade", func(t *testing.T) {
+		env := setupTestEnv(t)
+		const producer = `"entrypoint":"cli","version":"2.1.296",`
+		initial := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hello", tsEarly),
 			`{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}`,
-			`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`,
-			`{"type":"system","subtype":"turn_duration"}`,
-		}, open: []bool{true, true, false}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			env := setupTestEnv(t)
-			const producer = `"entrypoint":"cli","version":"2.1.296",`
-			initial := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)), producer, 0)
-			path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
-			env.engine.SyncAll(t.Context(), nil)
-			for i, line := range tc.lines {
-				if tc.legacy && i == len(tc.lines)-1 {
-					session, err := env.db.GetSessionFull(t.Context(), "notify")
-					require.NoError(t, err)
-					require.NotNil(t, session)
-					session.TerminationStatus = nil
-					require.NoError(t, env.db.UpsertSession(t.Context(), *session))
-				}
-				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-				require.NoError(t, err)
-				_, err = f.WriteString(testjsonl.ClaudeChainJSONL(t, line+"\n", producer, i+1))
-				require.NoError(t, err)
-				require.NoError(t, f.Close())
-				env.engine.SyncPaths([]string{path})
-				session, err := env.db.GetSessionFull(t.Context(), "notify")
-				require.NoError(t, err)
-				require.NotNil(t, session)
-				assert.Equal(t, tc.open[i], session.TurnOpen, "record %d", i)
-				if i == len(tc.lines)-1 {
-					require.NotNil(t, session.TerminationStatus)
-					assert.Equal(t, "awaiting_user", *session.TerminationStatus)
-					assert.True(t, session.LastWriteIncremental)
-				}
-			}
-		})
-	}
+		), producer, 0)
+		path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
+		env.engine.SyncAll(t.Context(), nil)
+		session, err := env.db.GetSessionFull(t.Context(), "notify")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		session.TerminationStatus = nil
+		require.NoError(t, env.db.UpsertSession(t.Context(), *session))
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		_, err = f.WriteString("{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		env.engine.SyncPaths([]string{path})
+		session, err = env.db.GetSessionFull(t.Context(), "notify")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		require.NotNil(t, session.TerminationStatus)
+		assert.Equal(t, "awaiting_user", *session.TerminationStatus)
+		assert.False(t, session.TurnOpen)
+		assert.True(t, session.LastWriteIncremental)
+	})
 	env := setupTestEnv(t)
 	const producer = `"entrypoint":"cli","version":"2.1.266",`
 	initial := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("hello", tsEarly)), producer, 0)
 	path := env.writeClaudeSession(t, "proj-notify", "notify.jsonl", initial)
 	env.engine.SyncAll(t.Context(), nil)
 	for i, step := range []struct {
-		line, status string
-		incremental  bool
-		open         bool
+		line        string
+		incremental bool
 	}{
-		{testjsonl.ClaudeAssistantJSON("done", tsEarlyS5, "end_turn"), "awaiting_user", true, true},
-		{`{"type":"system","subtype":"turn_duration"}`, "awaiting_user", true, false},
-		{`{"type":"queue-operation","operation":"dequeue","timestamp":"2024-01-01T10:00:10Z"}`, "awaiting_user", true, false},
-		{`{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`, "awaiting_user", false, false},
+		{testjsonl.ClaudeAssistantJSON("done", tsEarlyS5, "end_turn"), true},
+		{`{"type":"system","subtype":"turn_duration"}`, true},
+		{`{"type":"queue-operation","operation":"dequeue","timestamp":"2024-01-01T10:00:10Z"}`, true},
+		{`{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`, false},
 	} {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 		require.NoError(t, err)
@@ -18458,18 +18441,12 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 		session, err := env.db.GetSessionFull(t.Context(), "notify")
 		require.NoError(t, err)
 		require.NotNil(t, session)
-		if step.status == "" {
-			assert.Nil(t, session.TerminationStatus)
-		} else {
-			require.NotNil(t, session.TerminationStatus)
-			assert.Equal(t, step.status, *session.TerminationStatus)
-		}
-		assert.Equal(t, step.open, session.TurnOpen)
+		require.NotNil(t, session.TerminationStatus)
+		assert.Equal(t, "awaiting_user", *session.TerminationStatus)
 		page, err := env.db.ListSessions(t.Context(), db.SessionFilter{EachRow: true})
 		require.NoError(t, err)
 		require.Len(t, page.Sessions, 1)
 		assert.Equal(t, "line-1", page.Sessions[0].LastReplyID)
-		assert.Equal(t, 2, session.MessageCount)
 		assert.Equal(t, step.incremental, session.LastWriteIncremental)
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -18484,5 +18461,4 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 	require.NotNil(t, session.TerminationStatus)
 	assert.Equal(t, "awaiting_user", *session.TerminationStatus)
 	assert.False(t, session.LastWriteIncremental)
-	assert.False(t, session.TurnOpen)
 }

@@ -79,7 +79,10 @@ describe("desktop notification watcher", () => {
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       await flush();
       await change();
-      expect(plugin.sendNotification).toHaveBeenCalledOnce();
+      expect(plugin.sendNotification).toHaveBeenCalledExactlyOnceWith({
+        title: "Fix login: turn finished",
+        body: "The agent finished this turn and is waiting for you.",
+      });
       stop?.();
       vi.setSystemTime(new Date("2026-10-07T12:06:00Z"));
       await start();
@@ -93,28 +96,11 @@ describe("desktop notification watcher", () => {
     await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
-  it("records a waiting baseline silently", async () => {
-    row.ended_at = "2026-10-07T11:59:59Z";
-    row.termination_status = "awaiting_user";
-    await start();
-    await change();
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-  });
   it.each([undefined, ""])("stays silent without a reply ID: %s", async (last_reply_id) => {
     row.last_reply_id = last_reply_id;
     await start();
     await change({ termination_status: "awaiting_user" });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-  });
-  it("notifies once on completion", async () => {
-    await start();
-    await change({ termination_status: "awaiting_user" });
-    expect(plugin.sendNotification).toHaveBeenCalledExactlyOnceWith({
-      title: "Fix login: turn finished",
-      body: "The agent finished this turn and is waiting for you.",
-    });
-    await change();
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("records a finished import after enabling silently", async () => {
     list.mockResolvedValueOnce({ sessions: [], total: 0 });

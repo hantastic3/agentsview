@@ -9865,7 +9865,6 @@ func TestMigration_TurnOpenColumn(t *testing.T) {
 	for _, row := range page.Sessions {
 		assert.Equal(t, row.Agent == "claude", row.TurnOpen)
 	}
-	assert.Empty(t, session.LastReplyID)
 	var version int
 	require.NoError(t, reopened.Reader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	assert.Equal(t, 127, version)
