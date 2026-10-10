@@ -62,7 +62,8 @@ func TestClaudeTurnDuration(t *testing.T) {
 		status         TerminationStatus
 		open           bool
 	}{
-		{name: "queued prompt during tools", lines: []string{user,
+		{name: "queued prompt during tools", lines: []string{
+			user,
 			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
 			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
 			`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`,
@@ -154,7 +155,8 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"two"}]}}`, answer, duration,
 		}},
-		{name: "queued prompt during tools", lines: []string{user,
+		{name: "queued prompt during tools", lines: []string{
+			user,
 			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
 			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
 			`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`,
@@ -163,11 +165,13 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 		}},
 		{name: "two hookless deferred turns", lines: []string{user, answer, user, answer, duration}},
 		{name: "deferred swarm", lines: []string{user, answer, `{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`, user, answer, duration, summary, duration}},
-		{name: "streaming run", lines: []string{user,
+		{name: "streaming run", lines: []string{
+			user,
 			`{"type":"assistant","message":{"id":"reply","content":"working","stop_reason":null}}`,
 			`{"type":"assistant","message":{"id":"reply","content":"done","stop_reason":"end_turn"}}`, summary, duration,
 		}},
-		{name: "discarded metadata between chunks", lines: []string{user,
+		{name: "discarded metadata between chunks", lines: []string{
+			user,
 			`{"type":"assistant","message":{"id":"reply","content":"working","stop_reason":null}}`,
 			`{"type":"progress","data":{"type":"bash_progress","output":"still working"}}`,
 			summary,

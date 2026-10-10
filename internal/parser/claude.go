@@ -1195,9 +1195,10 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 		var queued []claudeQueuedCommand
 		for _, line := range lines {
 			typ := gjson.Get(line, "type").Str
-			if typ == "user" || typ == "assistant" {
+			switch typ {
+			case "user", "assistant":
 				entries = append(entries, dagEntry{uuid: gjson.Get(line, "uuid").Str, entryType: typ, lineIndex: len(entries), timestamp: extractTimestamp(line), line: line})
-			} else if typ == "attachment" {
+			case "attachment":
 				if qc, ok := extractQueuedCommand(line); ok {
 					queued = append(queued, qc)
 				}

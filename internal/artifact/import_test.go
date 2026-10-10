@@ -106,6 +106,8 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	assert.Zero(t, count)
 
 	t.Run("missing completion evidence", func(t *testing.T) {
+		t.Parallel()
+
 		store := newTestArtifactStore(t)
 		m := importTestManifest("legacy")
 		m.Session.TerminationStatus = new("awaiting_user")

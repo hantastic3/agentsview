@@ -14,12 +14,12 @@ import (
 )
 
 // ClaudeChainJSONL stamps the producer and chains every record, including system lines.
-func ClaudeChainJSONL(t testing.TB, content, producer string, start int) string {
-	t.Helper()
+func ClaudeChainJSONL(tb testing.TB, content, producer string, start int) string {
+	tb.Helper()
 	var result strings.Builder
-	for _, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSuffix(content, "\n"), "\n") {
 		var record map[string]any
-		require.NoError(t, json.Unmarshal([]byte(line), &record))
+		require.NoError(tb, json.Unmarshal([]byte(line), &record))
 		record["uuid"] = "line-" + strconv.Itoa(start)
 		if start > 0 {
 			record["parentUuid"] = "line-" + strconv.Itoa(start-1)
