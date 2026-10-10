@@ -20,6 +20,7 @@ func ClaudeChainJSONL(tb testing.TB, content, producer string, start int) string
 	for line := range strings.SplitSeq(strings.TrimSuffix(content, "\n"), "\n") {
 		var record map[string]any
 		require.NoError(tb, json.Unmarshal([]byte(line), &record))
+		require.NotNil(tb, record)
 		record["uuid"] = "line-" + strconv.Itoa(start)
 		if start > 0 {
 			record["parentUuid"] = "line-" + strconv.Itoa(start-1)

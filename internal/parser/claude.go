@@ -879,7 +879,7 @@ func claudeParseSessionFrom(
 	stored := scan.stored
 	var (
 		entries        []dagEntry
-		verdictLines   []string
+		verdictLines   = make([]string, 0)
 		queuedCommands []claudeQueuedCommand
 		subagentMap    = make(map[string]string)
 		lineIndex      = startOrdinal
