@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SessionsService, type DbSession } from "./api/generated/index.js";
-import { startNotificationWatcher, requestNotificationPermission } from "./notifications.js";
+import { startNotificationWatcher } from "./notifications.js";
 
 const mocks = vi.hoisted(() => ({ callback: () => {}, unsubscribe: vi.fn() }));
 vi.mock("./stores/events.svelte.js", () => ({
@@ -14,18 +14,14 @@ vi.mock("./stores/events.svelte.js", () => ({
 vi.mock("./api/generated/index.js", () => ({
   SessionsService: {
     getApiV1Sessions: vi.fn(),
-    getApiV1SessionsById: vi.fn(),
   },
 }));
 const plugin = {
-  isPermissionGranted: vi.fn(),
-  requestPermission: vi.fn(),
   sendNotification: vi.fn(),
 };
 let stop: (() => void) | undefined;
 let row: DbSession;
 const list = vi.mocked(SessionsService.getApiV1Sessions);
-const session = vi.mocked(SessionsService.getApiV1SessionsById);
 async function flush() {
   for (let i = 0; i < 15; i++) await Promise.resolve();
 }
@@ -44,7 +40,6 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-07T12:00:00Z"));
   vi.stubGlobal("__TAURI__", { notification: plugin });
-  plugin.isPermissionGranted.mockResolvedValue(true);
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   row = {
@@ -61,9 +56,6 @@ beforeEach(() => {
     last_reply_id: "reply-1",
   } as DbSession;
   list.mockImplementation(async () => ({ sessions: [row], total: 1 }));
-  session.mockImplementation(
-    async () => row as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>,
-  );
 });
 afterEach(() => {
   stop?.();
@@ -81,7 +73,6 @@ describe("desktop notification watcher", () => {
       await change({ started_at, termination_status: "awaiting_user" });
       await change();
       expect(plugin.sendNotification).toHaveBeenCalledOnce();
-      expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
       stop?.();
       vi.setSystemTime(new Date("2026-10-07T12:01:00Z"));
       await start();
@@ -100,19 +91,16 @@ describe("desktop notification watcher", () => {
     await start();
     await change();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-    expect(session).not.toHaveBeenCalled();
   });
   it.each([undefined, ""])("stays silent without a reply ID: %s", async (last_reply_id) => {
     row.last_reply_id = last_reply_id;
     await start();
     await change({ termination_status: "awaiting_user" });
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-    expect(session).not.toHaveBeenCalled();
   });
   it("notifies once on completion", async () => {
     await start();
     await change({ termination_status: "awaiting_user" });
-    expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
     expect(plugin.sendNotification).toHaveBeenCalledExactlyOnceWith({
       title: "Fix login: turn finished",
       body: "The agent finished this turn and is waiting for you.",
@@ -146,68 +134,16 @@ describe("desktop notification watcher", () => {
     "remembers silent completions: %j",
     async (patch) => {
       await start("session");
-      session.mockImplementation(
-        async () =>
-          ({ ...row, ...patch }) as Awaited<
-            ReturnType<typeof SessionsService.getApiV1SessionsById>
-          >,
-      );
-      await change({ termination_status: "awaiting_user" });
+      await change({ ...patch, termination_status: "awaiting_user" });
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       await change();
       expect(plugin.sendNotification).not.toHaveBeenCalled();
-      expect(session).toHaveBeenCalledOnce();
     },
   );
   it("notifies for the viewed session while the window is hidden", async () => {
     await start("session");
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     await change({ termination_status: "awaiting_user" });
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-  });
-  it("stays silent when the detail read reclassifies a session as automated", async () => {
-    await start();
-    session.mockImplementation(async () => ({ ...row, is_automated: true }));
-    await change({ termination_status: "awaiting_user" });
-    await change();
-    expect(session).toHaveBeenCalledExactlyOnceWith({ id: "session" });
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
-  });
-  it.each([{ last_reply_id: "reply-2" }, { termination_status: "clean" }, { turn_open: true }])(
-    "retries an unfinished or changed re-read: %j",
-    async (patch) => {
-      await start();
-      session.mockResolvedValueOnce({ ...row, ...patch } as Awaited<
-        ReturnType<typeof SessionsService.getApiV1SessionsById>
-      >);
-      await change({ termination_status: "awaiting_user" });
-      expect(plugin.sendNotification).not.toHaveBeenCalled();
-      await change();
-      expect(plugin.sendNotification).toHaveBeenCalledOnce();
-      expect(session).toHaveBeenCalledTimes(2);
-    },
-  );
-  it("retries a failed re-read after ten idle minutes", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    await start();
-    session.mockRejectedValueOnce(new Error("unavailable"));
-    vi.setSystemTime(new Date("2026-10-07T12:01:00Z"));
-    await change({ termination_status: "awaiting_user", ended_at: "2026-10-07T12:01:00Z" });
-    list.mockImplementation(async (params) => ({
-      sessions: Date.parse(row.ended_at!) >= Date.parse(params!.active_since!) ? [row] : [],
-      total: 1,
-    }));
-    vi.setSystemTime(new Date("2026-10-07T12:20:00Z"));
-    await change();
-    expect(list).toHaveBeenLastCalledWith({
-      active_since: "2026-10-07T12:00:00.000Z",
-      each_row: true,
-      include_one_shot: true,
-      cursor: undefined,
-    });
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
-    expect(session).toHaveBeenCalledTimes(2);
-    await change();
     expect(plugin.sendNotification).toHaveBeenCalledOnce();
   });
   it("discovers a completion after refresh failures longer than ten minutes", async () => {
@@ -285,13 +221,4 @@ describe("desktop notification watcher", () => {
     expect(list).toHaveBeenCalledTimes(calls);
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
-});
-
-it("requests permission only when needed and returns denial", async () => {
-  expect(await requestNotificationPermission()).toBe(true);
-  expect(plugin.requestPermission).not.toHaveBeenCalled();
-  plugin.isPermissionGranted.mockResolvedValue(false);
-  plugin.requestPermission.mockResolvedValue("denied");
-  expect(await requestNotificationPermission()).toBe(false);
-  expect(plugin.requestPermission).toHaveBeenCalledOnce();
 });

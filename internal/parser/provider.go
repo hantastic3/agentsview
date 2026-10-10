@@ -1122,6 +1122,8 @@ type IncrementalRequest struct {
 	StoredAgentLabel  string
 	StoredEntrypoint  string
 	StoredSessionKind string
+	// StoredTerminationStatus preserves verdicts for appends without messages.
+	StoredTerminationStatus TerminationStatus
 	// StoredUserMessageCount bounds first-prompt classification to one reparse.
 	StoredUserMessageCount int
 	// StoredClaudeLinearParse mirrors the session's persisted

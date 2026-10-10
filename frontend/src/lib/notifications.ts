@@ -3,8 +3,6 @@ import { m } from "./i18n/index.js";
 import { events } from "./stores/events.svelte.js";
 
 type NotificationBridge = {
-  isPermissionGranted: () => Promise<boolean>;
-  requestPermission: () => Promise<string>;
   sendNotification: (options: { title: string; body: string }) => void;
 };
 
@@ -15,24 +13,6 @@ function bridge() {
 
 export function notificationsAvailable(): boolean {
   return !!bridge();
-}
-
-async function notificationPermissionGranted(): Promise<boolean> {
-  try {
-    return (await bridge()?.isPermissionGranted()) ?? false;
-  } catch {
-    return false;
-  }
-}
-
-export async function requestNotificationPermission(): Promise<boolean> {
-  try {
-    return (
-      (await notificationPermissionGranted()) || (await bridge()?.requestPermission()) === "granted"
-    );
-  } catch {
-    return false;
-  }
 }
 
 function finished(row: DbSession): boolean {
@@ -52,7 +32,6 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
 
   function silent(row: DbSession): boolean {
     return (
-      row.is_automated ||
       row.relationship_type === "subagent" ||
       (viewingId() === row.id && document.visibilityState === "visible" && document.hasFocus())
     );
@@ -89,7 +68,6 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         cursor = result.next_cursor;
       } while (cursor && !stopped);
       if (stopped) return;
-      let readsSucceeded = true;
       for (const row of rows) {
         let previous = seen.get(row.id);
         if (!previous) {
@@ -103,18 +81,13 @@ export function startNotificationWatcher(viewingId: () => string | null): () => 
         }
         if (!finished(row) || previous.replyId === row.last_reply_id) continue;
         try {
-          const current = await SessionsService.getApiV1SessionsById({ id: row.id });
-          if (stopped) return;
-          if (finished(current) && current.last_reply_id === row.last_reply_id) {
-            send(current);
-            previous.replyId = row.last_reply_id;
-          }
+          send(row);
+          previous.replyId = row.last_reply_id;
         } catch (err) {
-          readsSucceeded = false;
-          console.warn("notification turn-end read failed", err);
+          console.warn("notification delivery failed", err);
         }
       }
-      if (readsSucceeded) coveredSince = fetchedAt;
+      coveredSince = fetchedAt;
     } catch (err) {
       console.warn("notification session read failed", err);
     } finally {

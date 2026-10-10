@@ -22,8 +22,6 @@ afterEach(() => {
 
 it("saves the notification toggle and renders the saved value", async () => {
   const plugin = {
-    isPermissionGranted: vi.fn().mockResolvedValue(false),
-    requestPermission: vi.fn().mockResolvedValue("granted"),
     sendNotification: vi.fn(),
   };
   vi.stubGlobal("__TAURI__", { notification: plugin });
@@ -48,14 +46,12 @@ it("saves the notification toggle and renders the saved value", async () => {
   });
   const { getByRole } = render(NotificationsSettings);
   const enabled = () => getByRole("switch", { name: "Enable desktop notifications" });
-  expect(plugin.requestPermission).not.toHaveBeenCalled();
   await fireEvent.click(enabled());
   await waitFor(() =>
     expect(save).toHaveBeenCalledWith({
       notifications: { enabled: true },
     }),
   );
-  expect(plugin.requestPermission).toHaveBeenCalledOnce();
   expect((enabled() as HTMLInputElement).checked).toBe(true);
   save.mockResolvedValue({
     ...response,
@@ -65,36 +61,12 @@ it("saves the notification toggle and renders the saved value", async () => {
   expect(save).toHaveBeenLastCalledWith({
     notifications: { enabled: false },
   });
-  expect(plugin.requestPermission).toHaveBeenCalledOnce();
   expect(plugin.sendNotification).not.toHaveBeenCalled();
-});
-
-it("keeps notifications off and explains denied permission", async () => {
-  vi.stubGlobal("__TAURI__", {
-    notification: {
-      isPermissionGranted: vi.fn().mockResolvedValue(false),
-      requestPermission: vi.fn().mockResolvedValue("denied"),
-    },
-  });
-  const { getByRole } = render(NotificationsSettings);
-  const enabled = () => getByRole("switch", { name: "Enable desktop notifications" });
-  await fireEvent.click(enabled());
-  await waitFor(() =>
-    expect(getByRole("status").textContent).toBe(
-      "Notification permission was denied. Allow notifications for AgentsView in your system settings.",
-    ),
-  );
-  expect(SettingsService.putApiV1Settings).not.toHaveBeenCalled();
-  expect(settings.notifications.enabled).toBe(false);
-  expect((enabled() as HTMLInputElement).checked).toBe(false);
 });
 
 it("shows OS notification settings guidance and keeps the saved toggle on load", async () => {
   settings.notifications.enabled = true;
-  const plugin = {
-    isPermissionGranted: vi.fn().mockResolvedValue(false),
-    requestPermission: vi.fn(),
-  };
+  const plugin = { sendNotification: vi.fn() };
   vi.stubGlobal("__TAURI__", { notification: plugin });
   const { getByRole, getByText, queryByRole } = render(NotificationsSettings);
   expect(
@@ -106,16 +78,12 @@ it("shows OS notification settings guidance and keeps the saved toggle on load",
     ).toBe(true),
   );
   expect(queryByRole("status")).toBeNull();
-  expect(plugin.isPermissionGranted).not.toHaveBeenCalled();
-  expect(plugin.requestPermission).not.toHaveBeenCalled();
   expect(SettingsService.putApiV1Settings).not.toHaveBeenCalled();
 });
 
 it("reverts the toggle after a failed save", async () => {
   const name = "Enable desktop notifications";
-  vi.stubGlobal("__TAURI__", {
-    notification: { isPermissionGranted: vi.fn().mockResolvedValue(true) },
-  });
+  vi.stubGlobal("__TAURI__", { notification: { sendNotification: vi.fn() } });
   vi.mocked(SettingsService.putApiV1Settings).mockRejectedValueOnce(new Error("save failed"));
   const { getByRole } = render(NotificationsSettings);
   const toggle = getByRole("switch", { name }) as HTMLInputElement;

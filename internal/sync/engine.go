@@ -15857,6 +15857,10 @@ func (e *Engine) tryProviderIncrementalAppend(
 				}
 			}
 		}
+		var storedTermination parser.TerminationStatus
+		if inc.TerminationStatus != nil {
+			storedTermination = parser.TerminationStatus(*inc.TerminationStatus)
+		}
 		outcome, status, perr := provider.ParseIncremental(
 			ctx,
 			parser.IncrementalRequest{
@@ -15871,6 +15875,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredAgentLabel:          inc.AgentLabel,
 				StoredEntrypoint:          inc.Entrypoint,
 				StoredSessionKind:         inc.SessionKind,
+				StoredTerminationStatus:   storedTermination,
 				StoredUserMessageCount:    inc.UserMsgCount,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,

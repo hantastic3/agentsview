@@ -182,12 +182,14 @@ fixtures retain this field; missing identities remain source-local.
   duration; neither includes an owner ID. The deferred writer checks swarm
   timing and running tasks, rather than the active turn. Stop hooks run before
   the turn's own duration, and zero pending counts become absent fields.
-  SQLite's `turn_open` follows the last event: a non-sidechain assistant record
-  opens an interactive CLI 2.1.259+ turn; a duration closes it with zero or absent
-  pending counts. Other records keep the value. A deferred swarm flush can close
-  a later turn before its Stop hooks finish. A held detached tool call can stay
-  silent while another turn is active. `Classify` owns status; incremental reads
-  classify complete records from the last assistant run. Rechecked `qkt`,
+  SQLite's `turn_open` follows each branch's last event. A non-sidechain
+  assistant reply opens an interactive CLI 2.1.259+ turn; a duration closes it
+  with zero or absent pending counts. Metadata, including assistant compact
+  summaries, keeps the value. See
+  [notification limits](https://agentsview.io/docs/usage/#settings). `Classify`
+  owns status; incremental reads reuse stored status for progress-only batches
+  and classify complete records from the last assistant run when messages change.
+  Rechecked `qkt`,
   `_flushDeferredSwarmDuration` and `_holdDurationForDetachedToolCalls` in the
   installed bundle. Deferred-swarm and split-boundary fixtures verify these rules.
   Public producer source is unavailable.

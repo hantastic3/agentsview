@@ -1299,9 +1299,9 @@ load; a saved language preference takes precedence.
 Desktop notifications run only against writable SQLite servers. Read-only
 PostgreSQL, DuckDB and ClickHouse servers keep the watcher off.
 
-Desktop notifications alert you when the turn really ends and the agent waits
-for you, including forks and continuations. Sessions started before notifications
-were enabled stay silent on first sighting. A new session can toast even if its
+Desktop notifications alert you when the agent waits for you, including forks
+and continuations. Sessions started before notifications were enabled stay silent
+on first sighting. A new session can toast even if its
 first turn finishes before the next refresh.
 Subagents, automated sessions, and the session in a focused window stay silent.
 Missed updates arrive within five minutes while the app runs. On macOS 13 and
@@ -1310,11 +1310,13 @@ Re-imported sessions can toast if the watcher still remembers their earlier
 state. A session that finishes while trashed can also toast after restoration
 and catch-up import. The app cannot distinguish that import from a later turn.
 Toasts follow the OS notification settings for AgentsView.
-For Claude Code, an earlier swarm finishing can toast before the current turn's
-Stop hooks finish. A held detached tool call can stay silent while another turn
-is active.
-On platforms that report denied permission, the toggle stays off and shows how
-to allow notifications. Apps without the notification bridge show unavailable.
+Claude Code transcripts that record `turn_duration` normally notify after Stop
+hooks finish, with no background agents or workflows pending. Older and headless
+transcripts use the assistant's `end_turn` signal. A deferred swarm duration
+arriving during a later turn's Stop hooks can close that turn a few seconds early.
+A held detached tool call can stay silent while another turn is active. Tracking
+these completions separately would require the producer to record which turn
+owns each duration. Apps without the notification bridge show unavailable.
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 

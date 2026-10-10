@@ -371,10 +371,11 @@ func (p *claudeProvider) ParseIncremental(
 		path,
 		req.Offset,
 		claudeIncrementalScan{
-			termination:   &termination,
-			turnOpen:      &turnOpen,
-			startOrdinal:  req.StartOrdinal,
-			lastEntryUUID: req.LastEntryUUID,
+			termination:       &termination,
+			storedTermination: &req.StoredTerminationStatus,
+			turnOpen:          &turnOpen,
+			startOrdinal:      req.StartOrdinal,
+			lastEntryUUID:     req.LastEntryUUID,
 			stored: claudeStoredIdentity{
 				agentLabel:  req.StoredAgentLabel,
 				entrypoint:  req.StoredEntrypoint,

@@ -43,7 +43,9 @@ const legacyDeletionCauseSourceMissing = "source_missing"
 // it into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
-const sessionReplyCols = `COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), CAST(ordinal AS TEXT)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id,
+const sessionReplyIDCol = `COALESCE((SELECT COALESCE(NULLIF(source_uuid,''), 'row:' || json_array(id, timestamp, content)) FROM messages m WHERE m.session_id = sessions.id AND m.role = 'assistant' AND m.is_system = 0 ORDER BY m.ordinal DESC LIMIT 1), '') AS last_reply_id`
+
+const sessionReplyCols = `'' AS last_reply_id,
 	CASE WHEN agent = 'claude' THEN COALESCE(turn_open, 1) ELSE 0 END`
 
 // sessionBaseCols is the column list for standard session queries
@@ -748,6 +750,9 @@ func (db *DB) ListSessions(
 	}
 
 	columns := sessionBaseCols
+	if f.EachRow {
+		columns = strings.Replace(columns, "'' AS last_reply_id", sessionReplyIDCol, 1)
+	}
 	if f.IncludeSource {
 		columns += ", file_path, file_size, local_modified_at"
 	}
@@ -767,6 +772,12 @@ func (db *DB) ListSessions(
 	sessions, err := scanSessionRowsWithSource(rows, f.IncludeSource)
 	if err != nil {
 		return SessionPage{}, err
+	}
+	for i := range sessions {
+		// Row IDs can survive edits, so UUID-less replies also need a content fingerprint.
+		if strings.HasPrefix(sessions[i].LastReplyID, "row:") {
+			sessions[i].LastReplyID = fmt.Sprintf("row:%x", sha256.Sum256([]byte(sessions[i].LastReplyID)))
+		}
 	}
 
 	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
@@ -2827,6 +2838,7 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 // decide whether the Claude parser's skip-command path has left
 // the preview empty and a full parse should be forced.
 type IncrementalInfo struct {
+	TerminationStatus    *string
 	ID                   string
 	Project              string
 	SourceProject        string
@@ -2959,7 +2971,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 		`SELECT s.id, s.project, COALESCE(snap.project, ''),
 			s.machine, s.cwd, s.agent_label, s.entrypoint, s.session_kind,
 			file_size, file_mtime,
-			next_ordinal, last_entry_uuid, claude_linear_parse,
+			next_ordinal, last_entry_uuid, claude_linear_parse, termination_status,
 			file_inode, file_device,
 			message_count, user_message_count,
 			first_message,
@@ -2989,7 +3001,7 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 		&info.ID, &info.Project, &info.SourceProject,
 		&info.Machine, &info.Cwd,
 		&info.AgentLabel, &info.Entrypoint, &info.SessionKind,
-		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse,
+		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse, &info.TerminationStatus,
 		&fi, &fd,
 		&info.MsgCount, &info.UserMsgCount,
 		&firstMsg,

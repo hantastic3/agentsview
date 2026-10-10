@@ -152,6 +152,8 @@ func claudeParseFile(
 		globalStart      time.Time
 		globalEnd        time.Time
 		turnOpen         *bool
+		branchTurnOpen   *bool
+		turnStates       = map[string]*bool{}
 	)
 	allHaveUUID = true
 	if !opts.uploadIdentity {
@@ -193,8 +195,22 @@ func claudeParseFile(
 			}
 		}
 
-		turnOpen = foldClaudeTurnOpen(turnOpen, string(lineBytes))
 		entryType := gjson.GetBytes(lineBytes, "type").Str
+		turnOpen = foldClaudeTurnOpen(turnOpen, string(lineBytes))
+		if entryType == "user" || gjson.GetBytes(lineBytes, "isCompactSummary").Bool() || gjson.GetBytes(lineBytes, "isMeta").Bool() {
+			if parent, ok := turnStates[gjson.GetBytes(lineBytes, "parentUuid").Str]; ok {
+				branchTurnOpen = parent
+			}
+		}
+		state := foldClaudeTurnOpen(branchTurnOpen, string(lineBytes))
+		if entryType == "system" && branchTurnOpen != nil && state != nil {
+			*branchTurnOpen = *state
+		} else {
+			branchTurnOpen = state
+		}
+		if uuid := gjson.GetBytes(lineBytes, "uuid").Str; uuid != "" && (entryType == "user" || entryType == "assistant") {
+			turnStates[strings.Clone(uuid)] = branchTurnOpen
+		}
 		if opts.compatibleTitleEvents || opts.aiTitleFallback {
 			if opts.compatibleTitleEvents && compatibleName == "" {
 				compatibleName = strings.Clone(strings.TrimSpace(
@@ -452,6 +468,8 @@ func claudeParseFile(
 		sessionKind:     sessionKind,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
+		turnOpen:        turnOpen,
+		turnStates:      turnStates,
 	}
 
 	var (
@@ -517,7 +535,6 @@ func claudeParseFile(
 			lastAssistantStopReason(results[i].Messages),
 			lastLineFailed,
 		)
-		results[i].Session.TurnOpen = new(turnOpen != nil && *turnOpen)
 		results[i].Session.claudeRenameSeen = renameSeen
 	}
 
@@ -749,7 +766,6 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 
 func claudeWritesTurnDuration(line string) bool {
 	return gjson.Get(line, "entrypoint").Str == "cli" &&
-		!gjson.Get(line, "isSidechain").Bool() &&
 		semver.Compare("v"+gjson.Get(line, "version").Str, "v2.1.259") >= 0
 }
 
@@ -757,7 +773,7 @@ func claudeWritesTurnDuration(line string) bool {
 func foldClaudeTurnOpen(open *bool, line string) *bool {
 	switch gjson.Get(line, "type").Str {
 	case "assistant":
-		if !gjson.Get(line, "isSidechain").Bool() {
+		if !gjson.Get(line, "isSidechain").Bool() && !gjson.Get(line, "isCompactSummary").Bool() && !gjson.Get(line, "isMeta").Bool() {
 			return new(claudeWritesTurnDuration(line))
 		}
 	case "system":
@@ -822,11 +838,12 @@ type claudeStoredIdentity struct {
 // claudeIncrementalScan carries the per-session stored state an
 // incremental parse needs beyond the file path and byte offset.
 type claudeIncrementalScan struct {
-	termination   **TerminationStatus
-	turnOpen      **bool
-	startOrdinal  int
-	lastEntryUUID string
-	stored        claudeStoredIdentity
+	termination       **TerminationStatus
+	storedTermination *TerminationStatus
+	turnOpen          **bool
+	startOrdinal      int
+	lastEntryUUID     string
+	stored            claudeStoredIdentity
 	// storedLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing (multi-root or unresolvable-parent DAG).
@@ -1118,6 +1135,10 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 	if scan.termination == nil {
 		return nil
 	}
+	if len(entries) == 0 && len(msgs) == 0 && scan.storedTermination != nil {
+		*scan.termination = scan.storedTermination
+		return nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -1148,7 +1169,11 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 			continue
 		}
 		typ := gjson.GetBytes(line, "type").Str
-		entry := dagEntry{entryType: typ, line: resolveClaudePersistedToolResults(path, string(line))}
+		resolved := string(line)
+		if fromPrefix {
+			resolved = resolveClaudePersistedToolResults(path, resolved)
+		}
+		entry := dagEntry{entryType: typ, line: resolved}
 		msgs, _, _ := extractMessagesFrom([]dagEntry{entry}, 0)
 		isAssistant := slices.ContainsFunc(msgs, func(m ParsedMessage) bool { return !m.IsSystem && m.Role == RoleAssistant })
 		if sawAssistant && (typ == "user" || (isAssistant && (assistantID == "" || gjson.GetBytes(line, "message.id").Str != assistantID))) {
@@ -1179,11 +1204,9 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 		msgs, _, _ = extractMessagesFrom(entries, 0)
 		msgs = mergeQueuedCommands(msgs, queued, 0, queuedCommandMessage)
 	}
-	if scan.termination != nil {
-		*scan.termination = nil
-		if status := Classify(msgs, lastAssistantStopReason(msgs), false); status != "" {
-			*scan.termination = new(status)
-		}
+	*scan.termination = nil
+	if status := Classify(msgs, lastAssistantStopReason(msgs), false); status != "" {
+		*scan.termination = new(status)
 	}
 	return nil
 }
@@ -1589,6 +1612,8 @@ type claudeSessionMeta struct {
 	sessionKind     string
 	malformedLines  int
 	isTruncated     bool
+	turnOpen        *bool
+	turnStates      map[string]*bool
 }
 
 // applyTo sets source metadata fields on a ParsedSession.
@@ -1649,6 +1674,7 @@ func parseLinear(
 		UserMessageCount:  userCount,
 		File:              fileInfo,
 		ClaudeLinearParse: &linear,
+		TurnOpen:          new(meta.turnOpen != nil && *meta.turnOpen),
 	}
 	meta.applyTo(&sess)
 	if err := accumulateMessageTokenUsageContext(ctx, &sess, messages); err != nil {
@@ -1844,6 +1870,7 @@ func parseDAG(
 		}
 
 		linear := false
+		state := meta.turnStates[branchEntries[len(branchEntries)-1].uuid]
 		sess := ParsedSession{
 			ID:                sid,
 			Project:           project,
@@ -1858,6 +1885,7 @@ func parseDAG(
 			UserMessageCount:  userCount,
 			File:              fileInfo,
 			ClaudeLinearParse: &linear,
+			TurnOpen:          new(state != nil && *state),
 		}
 		meta.applyTo(&sess)
 		if err := accumulateMessageTokenUsageContext(

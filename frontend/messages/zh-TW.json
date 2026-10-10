@@ -2382,7 +2382,6 @@
   "settings_notifications_description": "在 Agent 結束回合時取得通知",
   "settings_notifications_keywords": "通知 桌面 提醒 回合 結束 notifications",
   "settings_notifications_unavailable": "此應用程式無法使用桌面通知。",
-  "settings_notifications_permission_denied": "通知權限遭拒。請在系統設定中允許 AgentsView 傳送通知。",
   "settings_notifications_enable": "啟用桌面通知",
   "settings_notifications_turn_end_hint": "通知遵循系統中 AgentsView 的通知設定。",
   "notification_turn_end_body": "Agent 已完成本回合，正在等待你的輸入。",

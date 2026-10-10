@@ -15192,6 +15192,14 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	)
 	env.engine.SyncAll(t.Context(), nil)
 
+	replyID := func() string {
+		page, err := env.db.ListSessions(t.Context(), db.SessionFilter{EachRow: true})
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		return page.Sessions[0].LastReplyID
+	}
+	originalReplyID := replyID()
+	require.NotEmpty(t, originalReplyID)
 	before := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, before, 2)
 	firstMessageID := before[0].ID
@@ -15200,7 +15208,7 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TerminationStatus)
 	assert.Equal(t, "awaiting_user", *sess.TerminationStatus)
-	assert.Equal(t, "1", sess.LastReplyID)
+	assert.Equal(t, originalReplyID, replyID())
 	assert.False(t, sess.TurnOpen)
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -15217,7 +15225,7 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TerminationStatus)
 	assert.Equal(t, "tool_call_pending", *sess.TerminationStatus)
-	assert.Equal(t, "1", sess.LastReplyID)
+	assert.Equal(t, originalReplyID, replyID())
 	assert.True(t, sess.LastWriteIncremental)
 	afterStarted := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, afterStarted, 2)
@@ -15238,7 +15246,7 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TerminationStatus)
 	assert.Equal(t, "awaiting_user", *sess.TerminationStatus)
-	assert.Equal(t, "1", sess.LastReplyID)
+	assert.Equal(t, originalReplyID, replyID())
 	assert.False(t, sess.TurnOpen)
 	assert.True(t, sess.LastWriteIncremental)
 	afterComplete := fetchMessages(t, env.db, "codex:"+uuid)
@@ -15267,7 +15275,7 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	require.Len(t, afterMessage, 3)
 	assert.Equal(t, firstMessageID, afterMessage[0].ID)
 	assert.Equal(t, "working", afterMessage[2].Content)
-	assert.Equal(t, "2", sess.LastReplyID)
+	assert.NotEqual(t, originalReplyID, replyID())
 }
 
 func TestIncrementalSync_CodexStaleProjectForcesFullReparse(t *testing.T) {
@@ -18409,7 +18417,7 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 			`{"type":"system","subtype":"turn_duration"}`,
 			`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
 			`{"type":"system","subtype":"turn_duration"}`,
-		}, open: []bool{true, true, true, true, true, true, false}},
+		}, open: []bool{true, true, true, true, false, false, false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)
@@ -18467,7 +18475,10 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 			assert.Equal(t, step.status, *session.TerminationStatus)
 		}
 		assert.Equal(t, step.open, session.TurnOpen)
-		assert.Equal(t, "line-1", session.LastReplyID)
+		page, err := env.db.ListSessions(t.Context(), db.SessionFilter{EachRow: true})
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, "line-1", page.Sessions[0].LastReplyID)
 		assert.Equal(t, 2, session.MessageCount)
 		assert.Equal(t, step.incremental, session.LastWriteIncremental)
 	}
