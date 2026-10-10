@@ -96,9 +96,11 @@ func TestClaudeTurnDuration(t *testing.T) {
 			if producer == "" {
 				producer = `"entrypoint":"cli","version":"2.1.296",`
 			}
-			session, _ := runClaudeParserTest(t, "session.jsonl", testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), producer, 0)+tc.partial)
+			content := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), producer, 0)
+			session, _ := runClaudeParserTest(t, "session.jsonl", content+tc.partial)
 			assert.Equal(t, tc.status, session.TerminationStatus)
 			assert.Equal(t, new(tc.open), session.TurnOpen)
+			assertClaudeIncrementalVerdictParity(t, content, tc.partial)
 		})
 	}
 	for _, count := range []string{`"unknown"`, "0.5", "-1", "null", "false"} {
@@ -143,11 +145,37 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 	const answer = `{"type":"assistant","message":{"content":"done","stop_reason":"end_turn"}}`
 	const duration = `{"type":"system","subtype":"turn_duration"}`
 	const summary = `{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`
+	for _, tail := range []string{`{"type":"progress"}`, duration} {
+		t.Run("message-free recovery "+tail, func(t *testing.T) {
+			prefix := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(user, answer), `"entrypoint":"cli","version":"2.1.296",`, 0)
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			writeSourceFile(t, path, prefix+tail[:len(tail)-1])
+			full, err := parseClaudeSession(path, "project", "local")
+			require.NoError(t, err)
+			require.Len(t, full, 1)
+			assert.Equal(t, TerminationTruncated, full[0].Session.TerminationStatus)
+			writeSourceFile(t, path, prefix+tail+"\n")
+			var status *TerminationStatus
+			var open *bool
+			msgs, _, _, consumed, err := claudeParseSessionFrom(path, int64(len(prefix)), claudeIncrementalScan{
+				termination: &status, storedTermination: new(full[0].Session.TerminationStatus), turnOpen: &open,
+				stored: claudeStoredIdentity{entrypoint: "cli"}, storedLinearParse: new(true),
+			})
+			require.NoError(t, err)
+			assert.Empty(t, msgs)
+			assert.Equal(t, new(TerminationAwaitingUser), status)
+			assert.Equal(t, int64(len(tail)+1), consumed)
+			if tail == duration {
+				assert.Equal(t, new(false), open)
+			} else {
+				assert.Nil(t, open)
+			}
+		})
+	}
 	for _, tc := range []struct {
-		name     string
-		lines    []string
-		partial  bool
-		producer string
+		name    string
+		lines   []string
+		partial bool
 	}{
 		{name: "parallel tools", lines: []string{
 			user,
@@ -155,16 +183,6 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
 			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"two"}]}}`, answer, duration,
 		}},
-		{name: "queued prompt during tools", lines: []string{
-			user,
-			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
-			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
-			`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`,
-			`{"type":"user","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
-			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`, duration,
-		}},
-		{name: "two hookless deferred turns", lines: []string{user, answer, user, answer, duration}},
-		{name: "deferred swarm", lines: []string{user, answer, `{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`, user, answer, duration, summary, duration}},
 		{name: "streaming run", lines: []string{
 			user,
 			`{"type":"assistant","message":{"id":"reply","content":"working","stop_reason":null}}`,
@@ -178,53 +196,55 @@ func TestClaudeIncrementalVerdictParity(t *testing.T) {
 			`{"type":"attachment","attachment":{"type":"task_reminder","content":"pending"}}`,
 			`{"type":"assistant","message":{"id":"reply","content":"done","stop_reason":"end_turn"}}`, duration,
 		}},
-		{name: "pending agents", lines: []string{user, answer, summary, `{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`, user, answer, duration}},
-		{name: "older cli", producer: `"entrypoint":"cli","version":"2.1.200",`, lines: []string{user, answer}},
-		{name: "assistant compact summary", lines: []string{user, answer, duration, `{"type":"assistant","isCompactSummary":true,"message":{"content":"summary"}}`, `{"type":"progress"}`}},
 		{name: "tail without event", lines: []string{user, answer, duration, `{"type":"progress"}`}},
 		{name: "partial final line", lines: []string{user, answer, summary, duration}, partial: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			producer := tc.producer
-			if producer == "" {
-				producer = `"entrypoint":"cli","version":"2.1.296",`
+			content := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), `"entrypoint":"cli","version":"2.1.296",`, 0)
+			partial := ""
+			if tc.partial {
+				partial = `{"type":"user"`
 			}
-			content := testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), producer, 0)
-			lines := strings.SplitAfter(content, "\n")
-			path := filepath.Join(t.TempDir(), "session.jsonl")
-			for end := 1; end < len(lines); end++ {
-				complete := strings.Join(lines[:end], "")
-				writeSourceFile(t, path, complete)
-				full, err := parseClaudeSession(path, "project", "local")
-				require.NoError(t, err)
-				require.Len(t, full, 1)
-				for split := 1; split <= end; split++ {
-					writeSourceFile(t, path, strings.Join(lines[:split], ""))
-					prefix, err := parseClaudeSession(path, "project", "local")
-					require.NoError(t, err)
-					require.Len(t, prefix, 1)
-					writeSourceFile(t, path, complete)
-					if tc.partial {
-						writeSourceFile(t, path, complete+`{"type":"user"`)
-					}
-					var status *TerminationStatus
-					var open *bool
-					offset := int64(len(strings.Join(lines[:split], "")))
-					_, _, _, consumed, err := claudeParseSessionFrom(path, offset, claudeIncrementalScan{
-						termination: &status, storedTermination: new(prefix[0].Session.TerminationStatus), turnOpen: &open, stored: claudeStoredIdentity{entrypoint: "cli"}, storedLinearParse: new(true),
-					})
-					require.NoError(t, err, "split %d end %d", split, end)
-					assert.Equal(t, new(full[0].Session.TerminationStatus), status, "split %d end %d", split, end)
-					if split == end || (tc.name == "tail without event" && split == 3 && end == 4) {
-						assert.Nil(t, open, "a tail without a turn event preserves storage")
-					}
-					if open == nil {
-						open = prefix[0].Session.TurnOpen
-					}
-					assert.Equal(t, full[0].Session.TurnOpen, open, "split %d end %d", split, end)
-					assert.Equal(t, int64(len(complete))-offset, consumed)
-				}
-			}
+			assertClaudeIncrementalVerdictParity(t, content, partial)
 		})
+	}
+}
+
+func assertClaudeIncrementalVerdictParity(t *testing.T, content, partial string) {
+	t.Helper()
+	lines := strings.SplitAfter(content, "\n")
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	for end := 1; end < len(lines); end++ {
+		complete := strings.Join(lines[:end], "")
+		writeSourceFile(t, path, complete)
+		full, err := parseClaudeSession(path, "project", "local")
+		require.NoError(t, err)
+		require.Len(t, full, 1)
+		for split := 1; split <= end; split++ {
+			writeSourceFile(t, path, strings.Join(lines[:split], ""))
+			prefix, err := parseClaudeSession(path, "project", "local")
+			require.NoError(t, err)
+			require.Len(t, prefix, 1)
+			writeSourceFile(t, path, complete)
+			if partial != "" {
+				writeSourceFile(t, path, complete+partial)
+			}
+			var status *TerminationStatus
+			var open *bool
+			offset := int64(len(strings.Join(lines[:split], "")))
+			_, _, _, consumed, err := claudeParseSessionFrom(path, offset, claudeIncrementalScan{
+				termination: &status, storedTermination: new(prefix[0].Session.TerminationStatus), turnOpen: &open, stored: claudeStoredIdentity{entrypoint: prefix[0].Session.Entrypoint}, storedLinearParse: new(true),
+			})
+			require.NoError(t, err, "split %d end %d", split, end)
+			assert.Equal(t, new(full[0].Session.TerminationStatus), status, "split %d end %d", split, end)
+			if split == end || strings.TrimSpace(strings.Join(lines[split:end], "")) == `{"type":"progress"}` {
+				assert.Nil(t, open, "a tail without a turn event preserves storage")
+			}
+			if open == nil {
+				open = prefix[0].Session.TurnOpen
+			}
+			assert.Equal(t, full[0].Session.TurnOpen, open, "split %d end %d", split, end)
+			assert.Equal(t, int64(len(complete))-offset, consumed)
+		}
 	}
 }

@@ -1135,7 +1135,7 @@ func (scan claudeIncrementalScan) setVerdicts(path string, offset int64, tail []
 	if scan.termination == nil {
 		return nil
 	}
-	if len(entries) == 0 && len(msgs) == 0 && scan.storedTermination != nil && *scan.storedTermination != "" {
+	if len(entries) == 0 && len(msgs) == 0 && scan.storedTermination != nil && *scan.storedTermination != "" && *scan.storedTermination != TerminationTruncated {
 		*scan.termination = scan.storedTermination
 		return nil
 	}

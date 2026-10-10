@@ -187,9 +187,11 @@ fixtures retain this field; missing identities remain source-local.
   with zero or absent pending counts. Metadata, including assistant compact
   summaries, keeps the value. See
   [notification limits](https://agentsview.io/docs/usage/#settings). `Classify`
-  owns status; incremental reads reuse nonempty stored status for progress-only
-  batches and classify the last assistant run when status is missing or messages
-  change. The sync upgrade fixture verifies completion after background work closes.
+  owns status; incremental reads reuse nonempty, non-truncated stored status for
+  message-free batches and classify the last assistant run when status is missing,
+  truncated, or messages change. Recovery fixtures verify valid progress and
+  duration records clear truncated status without adding messages. The sync
+  upgrade fixture verifies completion when stored status is missing.
   Rechecked `qkt`,
   `_flushDeferredSwarmDuration` and `_holdDurationForDetachedToolCalls` in the
   installed bundle. Deferred-swarm and split-boundary fixtures verify these rules.
