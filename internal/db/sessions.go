@@ -394,6 +394,7 @@ type Session struct {
 	TerminationStatus *string `json:"termination_status,omitempty"`
 	LastReplyID       string  `json:"last_reply_id,omitempty"`
 	TurnOpen          bool    `json:"turn_open,omitempty"`
+	TurnOpenUnknown   bool    `json:"-"`
 	FilePath          *string `json:"file_path,omitempty"`
 	FileSize          *int64  `json:"file_size,omitempty"`
 	FileMtime         *int64  `json:"file_mtime,omitempty"`
@@ -1504,7 +1505,7 @@ func parserParentSessionID(s Session) *string {
 
 func upsertSessionArgs(s Session) []any {
 	var turnOpen any
-	if s.Agent == "claude" {
+	if s.Agent == "claude" && !s.TurnOpenUnknown {
 		turnOpen = s.TurnOpen
 	}
 	s.RelationshipType = SessionRelationship(s)
@@ -1679,6 +1680,9 @@ func upsertSessionExec(
 	query := upsertSessionBaseSQL
 	if reviveSourceMissing {
 		query = upsertSessionSQL
+	}
+	if s.TurnOpenUnknown {
+		query = strings.Replace(query, "turn_open = COALESCE(excluded.turn_open, sessions.turn_open)", "turn_open = excluded.turn_open", 1)
 	}
 	_, err = exec(ctx,
 		query,
