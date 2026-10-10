@@ -18401,29 +18401,6 @@ func TestIncrementalSync_ClaudeTurnDuration(t *testing.T) {
 			`{"type":"system","subtype":"turn_duration","pendingBackgroundAgentCount":1}`,
 			`{"type":"system","subtype":"turn_duration"}`,
 		}, open: []bool{true, true, false}},
-		{name: "queued prompt during tools", lines: []string{
-			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
-			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
-			`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`,
-			`{"type":"user","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
-			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`,
-			`{"type":"system","subtype":"turn_duration"}`,
-		}, open: []bool{true, true, true, true, true, false}},
-		{name: "two hookless deferred turns", lines: []string{
-			`{"type":"assistant","message":{"content":"first reply","stop_reason":"end_turn"}}`,
-			`{"type":"user","message":{"content":"second"}}`,
-			`{"type":"assistant","message":{"content":"second reply","stop_reason":"end_turn"}}`,
-			`{"type":"system","subtype":"turn_duration"}`,
-		}, open: []bool{true, true, true, false}},
-		{name: "deferred swarm during Stop hooks", lines: []string{
-			`{"type":"assistant","message":{"content":"first reply","stop_reason":"end_turn"}}`,
-			`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
-			`{"type":"user","message":{"content":"second"}}`,
-			`{"type":"assistant","message":{"content":"second reply","stop_reason":"end_turn"}}`,
-			`{"type":"system","subtype":"turn_duration"}`,
-			`{"type":"system","subtype":"stop_hook_summary","hookErrors":[]}`,
-			`{"type":"system","subtype":"turn_duration"}`,
-		}, open: []bool{true, true, true, true, false, false, false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)

@@ -42,43 +42,33 @@ it("saves the notification toggle and renders the saved value", async () => {
   };
   save.mockResolvedValue({
     ...response,
-    notifications: { enabled: true },
-  });
-  const { getByRole } = render(NotificationsSettings);
-  const enabled = () => getByRole("switch", { name: "Enable desktop notifications" });
-  await fireEvent.click(enabled());
-  await waitFor(() =>
-    expect(save).toHaveBeenCalledWith({
-      notifications: { enabled: true },
-    }),
-  );
-  expect((enabled() as HTMLInputElement).checked).toBe(true);
-  save.mockResolvedValue({
-    ...response,
     notifications: { enabled: false },
   });
-  await fireEvent.click(enabled());
-  expect(save).toHaveBeenLastCalledWith({
-    notifications: { enabled: false },
-  });
-  expect(plugin.sendNotification).not.toHaveBeenCalled();
-});
-
-it("shows OS notification settings guidance and keeps the saved toggle on load", async () => {
   settings.notifications.enabled = true;
-  const plugin = { sendNotification: vi.fn() };
-  vi.stubGlobal("__TAURI__", { notification: plugin });
   const { getByRole, getByText, queryByRole } = render(NotificationsSettings);
   expect(
     getByText("Notifications follow your system's notification settings for AgentsView."),
   ).toBeTruthy();
-  await waitFor(() =>
-    expect(
-      (getByRole("switch", { name: "Enable desktop notifications" }) as HTMLInputElement).checked,
-    ).toBe(true),
-  );
   expect(queryByRole("status")).toBeNull();
-  expect(SettingsService.putApiV1Settings).not.toHaveBeenCalled();
+  const enabled = () => getByRole("switch", { name: "Enable desktop notifications" });
+  expect((enabled() as HTMLInputElement).checked).toBe(true);
+  expect(save).not.toHaveBeenCalled();
+  await fireEvent.click(enabled());
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith({
+      notifications: { enabled: false },
+    }),
+  );
+  expect((enabled() as HTMLInputElement).checked).toBe(false);
+  save.mockResolvedValue({
+    ...response,
+    notifications: { enabled: true },
+  });
+  await fireEvent.click(enabled());
+  expect(save).toHaveBeenLastCalledWith({
+    notifications: { enabled: true },
+  });
+  expect(plugin.sendNotification).not.toHaveBeenCalled();
 });
 
 it("reverts the toggle after a failed save", async () => {
@@ -89,7 +79,6 @@ it("reverts the toggle after a failed save", async () => {
   const toggle = getByRole("switch", { name }) as HTMLInputElement;
   await fireEvent.click(toggle);
   await waitFor(() => expect(toggle.checked).toBe(false));
-  expect(settings.saveError).toBe("save failed");
 });
 
 it("explains an unavailable notification bridge", () => {

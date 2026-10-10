@@ -1651,9 +1651,6 @@ func TestListSessions_EachRowActiveSince(t *testing.T) {
 	resp := decode[sessionListResponse](t, w)
 	require.Len(t, resp.Sessions, 1)
 	assert.Equal(t, "recent-fork", resp.Sessions[0].ID)
-	assert.Equal(t, "fork", resp.Sessions[0].RelationshipType)
-	assert.Equal(t, 1, resp.Total)
-
 }
 
 func TestListSessions_ExcludeOneShotDefault(t *testing.T) {

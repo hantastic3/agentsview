@@ -57,10 +57,21 @@ func TestClaudeTurnDuration(t *testing.T) {
 	const streaming = `{"type":"assistant","message":{"content":"working","stop_reason":null}}`
 	for _, tc := range []struct {
 		name, producer string
+		partial        string
 		lines          []string
 		status         TerminationStatus
 		open           bool
 	}{
+		{name: "queued prompt during tools", lines: []string{user,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"a","name":"Read","input":{}}],"stop_reason":"tool_use"}}`,
+			`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","content":"also inspect tests"}`,
+			`{"type":"attachment","timestamp":"2024-01-01T10:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also inspect tests"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"one"}]}}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","message":{"content":"done","stop_reason":"end_turn"}}`,
+		}, status: TerminationAwaitingUser, open: true},
+		{name: "truncated", producer: `"entrypoint":"cli","version":"2.1.266",`, lines: []string{user, answer, duration}, partial: `{"type":"user"`, status: TerminationTruncated},
+		{name: "user replied", producer: `"entrypoint":"cli","version":"2.1.266",`, lines: []string{user, answer, duration, `{"type":"user","message":{"content":"more"}}`}, status: TerminationClean},
+		{name: "compact boundary", producer: `"entrypoint":"cli","version":"2.1.266",`, lines: []string{user, answer, duration, `{"type":"assistant","uuid":"summary","isCompactSummary":true,"message":{"content":"summary"}}`}, status: TerminationAwaitingUser},
 		{name: "pending duration then deferred flush", lines: []string{user, answer, pending, user, answer, duration}, status: TerminationAwaitingUser},
 		{name: "summary after deferred flush", lines: []string{user, answer, pending, user, answer, duration, summary}, status: TerminationAwaitingUser},
 		{name: "own duration after deferred flush", lines: []string{user, answer, pending, user, answer, duration, summary, duration}, status: TerminationAwaitingUser},
@@ -84,7 +95,7 @@ func TestClaudeTurnDuration(t *testing.T) {
 			if producer == "" {
 				producer = `"entrypoint":"cli","version":"2.1.296",`
 			}
-			session, _ := runClaudeParserTest(t, "session.jsonl", testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), producer, 0))
+			session, _ := runClaudeParserTest(t, "session.jsonl", testjsonl.ClaudeChainJSONL(t, testjsonl.JoinJSONL(tc.lines...), producer, 0)+tc.partial)
 			assert.Equal(t, tc.status, session.TerminationStatus)
 			assert.Equal(t, new(tc.open), session.TurnOpen)
 		})
@@ -124,32 +135,6 @@ func TestClaudeTurnDuration(t *testing.T) {
 		assert.Equal(t, TerminationAwaitingUser, results[1].Session.TerminationStatus)
 		assert.Equal(t, new(false), results[1].Session.TurnOpen)
 	})
-}
-
-func TestClaudeTurnDurationPrecedence(t *testing.T) {
-	const tsEarlyS2 = "2024-01-01T10:00:02Z"
-	const duration = `{"type":"system","subtype":"turn_duration"}` + "\n"
-	for _, tc := range []struct {
-		name, tail string
-		want       TerminationStatus
-	}{
-		{"truncated", testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n" + duration + `{"type":"user"`, TerminationTruncated},
-		{"user replied", testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n" + duration + testjsonl.ClaudeUserJSON("more", tsEarlyS2) + "\n", TerminationClean},
-		{"compact boundary", testjsonl.ClaudeAssistantJSON("done", tsEarlyS1, "end_turn") + "\n" + duration + `{"type":"assistant","uuid":"summary","isCompactSummary":true,"message":{"content":"summary"}}` + "\n", TerminationAwaitingUser},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			content := testjsonl.ClaudeUserJSON("hello", tsEarly) + "\n" + tc.tail
-			partial := ""
-			if tc.name == "truncated" {
-				partial = `{"type":"user"`
-				content = strings.TrimSuffix(content, partial)
-			}
-			content = testjsonl.ClaudeChainJSONL(t, content, `"entrypoint":"cli","version":"2.1.266",`, 0) + partial
-			session, _ := runClaudeParserTest(t, "session.jsonl", content)
-			assert.Equal(t, tc.want, session.TerminationStatus)
-			assert.Equal(t, new(false), session.TurnOpen)
-		})
-	}
 }
 
 func TestClaudeIncrementalVerdictParity(t *testing.T) {
