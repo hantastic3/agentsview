@@ -2978,4 +2978,5 @@
   "settings_notifications_enable": "Activer les notifications de bureau",
   "settings_notifications_turn_end_hint": "Les notifications suivent les paramètres de notification de votre système pour AgentsView.",
   "notification_turn_end_body": "L'agent a terminé ce tour et vous attend.",
-  "notification_turn_end_title_suffix": "{name}: tour terminé"}
+  "notification_turn_end_title_suffix": "{name}: tour terminé"
+}

@@ -2954,4 +2954,5 @@
   "settings_notifications_enable": "Enable desktop notifications",
   "settings_notifications_turn_end_hint": "Notifications follow your system's notification settings for AgentsView.",
   "notification_turn_end_body": "The agent finished this turn and is waiting for you.",
-  "notification_turn_end_title_suffix": "{name}: turn finished"}
+  "notification_turn_end_title_suffix": "{name}: turn finished"
+}

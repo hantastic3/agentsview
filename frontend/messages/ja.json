@@ -2935,4 +2935,5 @@
   "settings_notifications_enable": "デスクトップ通知を有効にする",
   "settings_notifications_turn_end_hint": "通知はシステムの AgentsView の通知設定に従います。",
   "notification_turn_end_body": "エージェントはこのターンを終え、あなたの入力を待っています。",
-  "notification_turn_end_title_suffix": "{name}: ターンが完了しました"}
+  "notification_turn_end_title_suffix": "{name}: ターンが完了しました"
+}

@@ -2978,4 +2978,5 @@
   "settings_notifications_enable": "Activar notificaciones de escritorio",
   "settings_notifications_turn_end_hint": "Las notificaciones siguen los ajustes de notificaciones de tu sistema para AgentsView.",
   "notification_turn_end_body": "El agente terminó este turno y espera tu entrada.",
-  "notification_turn_end_title_suffix": "{name}: turno terminado"}
+  "notification_turn_end_title_suffix": "{name}: turno terminado"
+}

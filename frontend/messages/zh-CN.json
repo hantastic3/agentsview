@@ -2860,4 +2860,5 @@
   "settings_notifications_enable": "启用桌面通知",
   "settings_notifications_turn_end_hint": "通知遵循系统中 AgentsView 的通知设置。",
   "notification_turn_end_body": "Agent 已完成本回合，正在等待你的输入。",
-  "notification_turn_end_title_suffix": "{name}: 回合已完成"}
+  "notification_turn_end_title_suffix": "{name}: 回合已完成"
+}

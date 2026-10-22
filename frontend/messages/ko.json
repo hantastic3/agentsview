@@ -2866,4 +2866,5 @@
   "settings_notifications_enable": "데스크톱 알림 사용",
   "settings_notifications_turn_end_hint": "알림은 시스템의 AgentsView 알림 설정을 따릅니다.",
   "notification_turn_end_body": "에이전트가 이번 턴을 마치고 사용자 입력을 기다리고 있습니다.",
-  "notification_turn_end_title_suffix": "{name}: 턴 완료"}
+  "notification_turn_end_title_suffix": "{name}: 턴 완료"
+}

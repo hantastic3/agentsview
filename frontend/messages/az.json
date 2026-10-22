@@ -2956,4 +2956,5 @@
   "settings_notifications_enable": "Masaüstü bildirişlərini aktivləşdir",
   "settings_notifications_turn_end_hint": "Bildirişlər sisteminizin AgentsView üçün bildiriş parametrlərinə uyğun göstərilir.",
   "notification_turn_end_body": "Agent bu növbəni bitirib sizi gözləyir.",
-  "notification_turn_end_title_suffix": "{name}: növbə tamamlandı"}
+  "notification_turn_end_title_suffix": "{name}: növbə tamamlandı"
+}
